@@ -1,0 +1,25 @@
+[project]
+name = "llm-server"
+version = "1.0.0"
+description = "Self-hosted vLLM inference server with a FastAPI gateway for real-time voice agents"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "engine: needs a real vLLM engine (set LLM_TEST_ENGINE_URL)",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC"]
+ignore = ["B008", "ASYNC109", "ASYNC110"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501", "ASYNC210", "ASYNC251"]
