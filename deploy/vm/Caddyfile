@@ -1,0 +1,12 @@
+# Caddy site for the server: TLS (Let's Encrypt, automatic) on @DOMAIN@,
+# proxied to the server on loopback. deploy/vm/install.sh fills in @DOMAIN@
+# and @PORT@ and installs it as /etc/caddy/sites/aica-llm.caddy.
+#
+# Access logging stays off: it would record ?api_key= and realtime tokens.
+
+@DOMAIN@ {
+	reverse_proxy 127.0.0.1:@PORT@ {
+		# Stream tokens (SSE) as they are generated.
+		flush_interval -1
+	}
+}

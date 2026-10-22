@@ -59,6 +59,8 @@ curl -N localhost:8000/v1/sessions/call-1/responses -H "Authorization: Bearer $K
      -H 'content-type: application/json' -d '{"input": "What time is it in Chennai?"}'
 ```
 
+Open `http://127.0.0.1:8000/` for the **developer console**: one page that can call every HTTP route (example bodies, captured ids, SSE streaming, idempotency and `If-Match` headers, copy as curl) and drive the realtime WebSocket (conversation view, barge-in, client tool results, every client event).
+
 | Command | What it does |
 |---|---|
 | `./run.sh` | install, validate configuration, run (production entry point: `python -m app`) |

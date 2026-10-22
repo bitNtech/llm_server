@@ -1,0 +1,1359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AICA LLM Console</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f5; --line: #dfe3e8; --text: #1b1f24; --muted: #5f6b7a;
+  --accent: #2f6fde; --accent-text: #ffffff; --ok: #1a7f37; --warn: #9a6700; --err: #cf222e;
+  --get: #1a7f37; --post: #2f6fde; --patch: #8250df; --delete: #cf222e; --ws: #bc4c00;
+  --code-key: #8250df; --code-str: #0a3069; --code-num: #953800; --code-lit: #cf222e;
+  --user: #e7effd; --assistant: #ffffff; --shadow: 0 1px 2px rgba(0,0,0,.06);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216; --panel: #161b22; --panel-2: #1c222b; --line: #2d353f; --text: #e6edf3; --muted: #8b96a3;
+    --accent: #4c8dff; --accent-text: #0b0f14; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+    --get: #3fb950; --post: #58a6ff; --patch: #bc8cff; --delete: #ff7b72; --ws: #ffa657;
+    --code-key: #d2a8ff; --code-str: #a5d6ff; --code-num: #ffa657; --code-lit: #ff7b72;
+    --user: #17263d; --assistant: #1c222b; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+button, input, select, textarea { font: inherit; color: inherit; }
+input, select, textarea {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0;
+}
+textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; width: 100%; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+button {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  white-space: nowrap;
+}
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+button.danger { color: var(--err); }
+button:disabled { opacity: .5; cursor: default; }
+code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
+pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+a { color: var(--accent); }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; }
+.pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; font-size: 12px; }
+.pill.ok { color: var(--ok); border-color: currentColor; }
+.pill.err { color: var(--err); border-color: currentColor; }
+.pill.warn { color: var(--warn); border-color: currentColor; }
+.m { font: 700 11px var(--mono); display: inline-block; min-width: 46px; }
+.m.GET { color: var(--get); } .m.POST { color: var(--post); } .m.PATCH { color: var(--patch); }
+.m.DELETE { color: var(--delete); } .m.WS { color: var(--ws); }
+
+/* top bar */
+header {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 8px 16px; background: var(--panel);
+  border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
+}
+header .brand { font-weight: 700; display: flex; gap: 8px; align-items: center; }
+header .auth { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; flex: 1; justify-content: flex-end; }
+header label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+header input#key { width: 260px; }
+header input#tenant { width: 140px; }
+
+/* layout */
+.layout { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 50px); }
+aside { border-right: 1px solid var(--line); background: var(--panel); padding: 10px; overflow: auto;
+        max-height: calc(100vh - 50px); position: sticky; top: 50px; }
+aside input { width: 100%; margin-bottom: 8px; }
+.group { margin: 10px 0 2px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+         color: var(--muted); }
+.route { display: flex; gap: 6px; align-items: baseline; padding: 3px 6px; border-radius: 5px; cursor: pointer;
+         font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.route:hover { background: var(--panel-2); }
+.route.sel { background: var(--panel-2); outline: 1px solid var(--line); }
+.hist { font-family: var(--mono); font-size: 11.5px; padding: 2px 6px; cursor: pointer; border-radius: 4px;
+        display: flex; gap: 6px; }
+.hist:hover { background: var(--panel-2); }
+main { padding: 14px 16px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; box-shadow: var(--shadow); }
+.card + .card { margin-top: 12px; }
+h2 { font-size: 15px; margin: 0; font-family: var(--mono); word-break: break-all; }
+h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 6px; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 1250px) { .split { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 800px) {
+  .layout { grid-template-columns: 1fr; }
+  aside { position: static; max-height: 260px; border-right: 0; border-bottom: 1px solid var(--line); }
+  header input#key { width: 100%; }
+  header .auth { justify-content: flex-start; }
+}
+.fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: center; }
+.fields label { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.fields input { width: 100%; }
+.hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.banner { border: 1px solid var(--warn); border-radius: 6px; padding: 8px 10px; margin-top: 8px; font-size: 13px; }
+.banner code { word-break: break-all; }
+.status { font-family: var(--mono); font-weight: 700; }
+.status.s2 { color: var(--ok); } .status.s4 { color: var(--warn); } .status.s5, .status.s0 { color: var(--err); }
+.hdrs { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.hdrs b { color: var(--text); font-weight: 600; }
+.body-view { background: var(--panel-2); border-radius: 6px; padding: 10px; max-height: 70vh; overflow: auto; margin-top: 8px; }
+.j-k { color: var(--code-key); } .j-s { color: var(--code-str); } .j-n { color: var(--code-num); } .j-l { color: var(--code-lit); }
+.tabs { display: flex; gap: 4px; margin-top: 10px; border-bottom: 1px solid var(--line); }
+.tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 4px 10px; }
+.tabs button.on { border-bottom-color: var(--accent); font-weight: 600; }
+.ev { border-bottom: 1px solid var(--line); padding: 3px 0; font-family: var(--mono); font-size: 12px; }
+.ev summary { cursor: pointer; display: flex; gap: 8px; list-style: none; align-items: baseline; }
+.ev summary::-webkit-details-marker { display: none; }
+.ev .t { color: var(--muted); min-width: 52px; text-align: right; }
+.ev .n { font-weight: 600; }
+.ev .d { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.ev.out .n { color: var(--accent); }
+.ev.error .n { color: var(--err); }
+.ev pre { padding: 6px 0 6px 60px; }
+.stream-text { white-space: pre-wrap; font-size: 15px; line-height: 1.55; }
+.chip { display: inline-block; font: 11.5px var(--mono); border: 1px solid var(--line); background: var(--panel-2);
+        border-radius: 4px; padding: 0 6px; margin: 2px 4px 2px 0; word-break: break-all; }
+.chip.err { color: var(--err); }
+.kv { display: flex; flex-wrap: wrap; gap: 4px 14px; font: 12px var(--mono); color: var(--muted); margin-top: 6px; }
+.kv b { color: var(--text); font-weight: 600; }
+
+/* realtime */
+.ws-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .ws-grid { grid-template-columns: minmax(0, 1fr); } }
+.transcript { max-height: 55vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px; }
+.bubble { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; max-width: 92%; }
+.bubble.user { background: var(--user); align-self: flex-end; }
+.bubble.assistant { background: var(--assistant); align-self: flex-start; }
+.bubble .who { font-size: 11px; color: var(--muted); margin-bottom: 2px; font-family: var(--mono); }
+.bubble .txt { white-space: pre-wrap; }
+.sys { align-self: center; font: 11.5px var(--mono); color: var(--muted); text-align: center; }
+.sys.err { color: var(--err); }
+.log { max-height: 45vh; overflow: auto; }
+.pending { border: 1px dashed var(--warn); border-radius: 8px; padding: 8px; margin-top: 6px; }
+.pending textarea { min-height: 50px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">AICA LLM Console <span id="ready" class="pill">checking…</span></div>
+  <div class="auth">
+    <label>API key <input id="key" type="password" placeholder="aica_… or platform admin key" autocomplete="off" spellcheck="false"></label>
+    <button id="keyShow" type="button" title="Show or hide the key">show</button>
+    <label title="Platform admin keys act inside a tenant with X-Tenant-ID">X-Tenant-ID <input id="tenant" placeholder="admin keys only" spellcheck="false"></label>
+    <label title="Keep the key in this browser's localStorage instead of only this tab"><input type="checkbox" id="remember"> remember</label>
+    <span id="who" class="pill">no key</span>
+    <a id="docsLink" href="/docs" target="_blank" rel="noopener" class="small">OpenAPI ↗</a>
+  </div>
+</header>
+
+<div class="layout">
+  <aside>
+    <input id="filter" placeholder="Filter routes  ( / )" spellcheck="false">
+    <div id="routes"></div>
+    <div class="group">History <button id="histClear" type="button" class="small" style="padding:0 6px;float:right">clear</button></div>
+    <div id="history" class="small muted">No requests yet.</div>
+    <div class="group">Captured ids</div>
+    <div id="captured" class="small muted">Ids from responses appear here and fill path parameters.</div>
+  </aside>
+
+  <main>
+    <!-- HTTP route tester -->
+    <section id="http">
+      <div class="split">
+        <div class="card">
+          <div class="row"><span id="rMethod" class="m"></span><h2 id="rPath" class="grow"></h2></div>
+          <div id="rSummary" class="muted" style="margin-top:4px"></div>
+          <div class="kv" id="rMeta"></div>
+
+          <div id="pathBox"><h3>Path</h3><div class="fields" id="pathFields"></div></div>
+          <div id="queryBox"><h3>Query</h3><div class="fields" id="queryFields"></div></div>
+
+          <h3>Headers</h3>
+          <div class="fields">
+            <label for="hReqId">X-Request-ID</label>
+            <div class="row"><input id="hReqId" class="grow" placeholder="auto (server assigns req_…)" spellcheck="false"><button type="button" data-gen="hReqId">new</button></div>
+            <label for="hIdem" data-idem>Idempotency-Key</label>
+            <div class="row" data-idem><input id="hIdem" class="grow" placeholder="optional; replays return Idempotent-Replayed: true" spellcheck="false"><button type="button" data-gen="hIdem">new</button></div>
+            <label for="hIfMatch" data-ifmatch>If-Match</label>
+            <div data-ifmatch><input id="hIfMatch" placeholder='"v3" (filled from the last ETag seen)' spellcheck="false" style="width:100%"></div>
+          </div>
+          <details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">Extra headers</summary>
+            <textarea id="hExtra" rows="2" placeholder="Name: value (one per line)" spellcheck="false"></textarea>
+          </details>
+
+          <div id="bodyBox">
+            <h3 class="row" style="justify-content:space-between">Body (JSON)
+              <span class="row" style="text-transform:none;letter-spacing:0">
+                <select id="exSel" title="Example bodies"></select>
+                <button type="button" id="fmt">format</button>
+              </span>
+            </h3>
+            <textarea id="body" rows="14" spellcheck="false"></textarea>
+            <div class="hint" id="bodyHint"></div>
+          </div>
+
+          <div class="row" style="margin-top:12px">
+            <button type="button" class="primary" id="send">Send <span class="small">(Ctrl+Enter)</span></button>
+            <button type="button" id="abort" disabled>Stop stream</button>
+            <button type="button" id="cancelGen" hidden></button>
+            <span class="grow"></span>
+            <button type="button" id="curl">copy as curl</button>
+          </div>
+        </div>
+
+        <div class="card" id="resCard">
+          <div class="row"><span id="resStatus" class="status muted">No response yet</span><span class="grow"></span><span id="resTime" class="small muted mono"></span></div>
+          <div id="resHdrs" class="hdrs" style="margin-top:6px"></div>
+          <div id="resBanner"></div>
+          <div class="tabs" id="resTabs">
+            <button type="button" data-tab="body" class="on">Body</button>
+            <button type="button" data-tab="text" hidden>Streamed text</button>
+            <button type="button" data-tab="events" hidden>Events</button>
+            <button type="button" data-tab="headers">All headers</button>
+          </div>
+          <div class="body-view" data-pane="body"><pre id="resBody" class="muted">Pick a route on the left and press Send.</pre></div>
+          <div class="body-view" data-pane="text" hidden><div id="resText" class="stream-text"></div><div id="resTextMeta" class="kv"></div></div>
+          <div class="body-view" data-pane="events" hidden><div id="resEvents"></div></div>
+          <div class="body-view" data-pane="headers" hidden><pre id="resAllHdrs"></pre></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Realtime WebSocket -->
+    <section id="ws" hidden>
+      <div class="card">
+        <div class="row"><span class="m WS">WS</span><h2 class="grow">/v1/realtime</h2><span id="wsState" class="pill">disconnected</span></div>
+        <div class="muted" style="margin-top:4px">Realtime voice-agent protocol <code>aica.realtime.v1</code>: one connection drives one session.</div>
+        <h3>Connect</h3>
+        <div class="fields">
+          <label for="wsAgent">agent_id</label><input id="wsAgent" list="dl-agent_id" placeholder="new session bound to this agent (optional)" spellcheck="false">
+          <label for="wsSession">session_id</label>
+          <div class="row"><input id="wsSession" class="grow" list="dl-session_id" placeholder="resume this session (optional)" spellcheck="false">
+            <label class="small muted"><input type="checkbox" id="wsCreate"> create if missing</label></div>
+          <label for="wsAuth">auth</label>
+          <div class="row">
+            <select id="wsAuth" class="grow">
+              <option value="mint">Mint a realtime token with the API key (POST /v1/realtime/tokens)</option>
+              <option value="key">Send the API key as the bearer.&lt;key&gt; subprotocol</option>
+              <option value="token">Use a realtime token I paste</option>
+            </select>
+            <input id="wsTtl" type="number" min="30" max="86400" value="600" style="width:90px" title="token ttl_s">
+          </div>
+          <label for="wsToken" data-wstoken hidden>token</label><input id="wsToken" data-wstoken hidden placeholder="eyJ…" spellcheck="false">
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="primary" id="wsConnect">Connect</button>
+          <button type="button" id="wsDisconnect" disabled>Disconnect</button>
+          <span id="wsInfo" class="small muted grow"></span>
+        </div>
+      </div>
+
+      <div class="ws-grid" style="margin-top:12px">
+        <div class="card">
+          <h3 style="margin-top:0">Talk as the caller</h3>
+          <div class="row">
+            <input id="wsSay" class="grow" placeholder="Type an utterance → response.create {input}" spellcheck="false">
+            <button type="button" class="primary" id="wsSayBtn">Send</button>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button type="button" id="wsGreet" hidden>Speak greeting</button>
+            <button type="button" id="wsBarge" title="response.cancel with the text received so far as spoken_text">Barge-in</button>
+            <button type="button" id="wsDiscard" title="response.cancel {discard: true}">Discard turn</button>
+            <button type="button" id="wsPing">ping</button>
+            <button type="button" id="wsGet">session.get</button>
+            <button type="button" class="danger" id="wsEnd">session.end</button>
+          </div>
+          <div id="wsPending"></div>
+
+          <h3>Compose any client event</h3>
+          <div class="row">
+            <select id="wsEvType" class="grow"></select>
+            <button type="button" id="wsEvSend" class="primary">Send event</button>
+          </div>
+          <textarea id="wsEvBody" rows="10" spellcheck="false" style="margin-top:6px"></textarea>
+          <div class="hint" id="wsEvHint"></div>
+        </div>
+
+        <div class="card">
+          <div class="tabs" id="wsTabs" style="margin-top:0">
+            <button type="button" data-tab="conv" class="on">Conversation</button>
+            <button type="button" data-tab="log">Event log <span id="wsCount" class="muted"></span></button>
+            <span class="grow"></span>
+            <label class="small muted row" style="gap:4px"><input type="checkbox" id="wsHideDeltas" checked> hide text deltas in log</label>
+            <button type="button" id="wsClear" class="small">clear</button>
+          </div>
+          <div data-wspane="conv"><div class="transcript" id="wsConv"><div class="sys">Connect to start a session.</div></div></div>
+          <div data-wspane="log" hidden><div class="log" id="wsLog"></div></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="datalists"></div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ helpers */
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+function el(tag, attrs = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") n.className = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null) n.append(kid.nodeType ? kid : String(kid));
+  return n;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const rand = n => [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, "0")).join("");
+const store = {
+  get(k, d) { try { const v = sessionStorage.getItem(k) ?? localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v, persist) {
+    try { sessionStorage.setItem(k, JSON.stringify(v)); if (persist) localStorage.setItem(k, JSON.stringify(v)); else localStorage.removeItem(k); } catch {}
+  },
+};
+function highlight(value) {
+  const json = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  return esc(json).replace(/(&quot;(?:\\.|[^&\\]|&(?!quot;))*?&quot;)(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+    (m, str, colon, lit) => str ? `<span class="${colon ? "j-k" : "j-s"}">${str}</span>${colon || ""}`
+      : lit ? `<span class="j-l">${m}</span>` : `<span class="j-n">${m}</span>`);
+}
+const short = (v, n = 140) => { const s = typeof v === "string" ? v : JSON.stringify(v); return s.length > n ? s.slice(0, n) + "…" : s; };
+const today = (offset = 0) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10);
+
+/* ------------------------------------------------------------------- routes */
+const LIST = [["limit", "50"], ["cursor", ""]];
+const R = (g, m, p, s, o = {}) => ({g, m, p, s, ...o, id: m + " " + p});
+const ROUTES = [
+  R("Health", "GET", "/health/live", "Liveness: the process is serving", {auth: "none"}),
+  R("Health", "GET", "/health/ready", "Readiness: Vertex usable, Firestore reachable, not draining", {auth: "none"}),
+  R("Health", "GET", "/health", "Detailed status: provider routes, circuit breakers, Firestore, MCP, admission, sessions", {auth: "any credential"}),
+  R("Health", "GET", "/metrics", "Prometheus metrics (text)", {auth: "optional (usage:read when METRICS_REQUIRE_AUTH)"}),
+
+  R("Identity", "GET", "/v1/me", "The authenticated principal", {auth: "any credential"}),
+  R("Identity", "POST", "/v1/tenants", "Create a tenant + its first owner key and webhook secret (shown once)", {auth: "admin", idem: 1, ex: {
+    "Tenant": {name: "Dev", settings: {rate_limit_per_minute: 600}},
+    "Readable id": {name: "City Hospital", id: "city-hospital"}}}),
+  R("Identity", "GET", "/v1/tenants", "List tenants", {auth: "admin", q: LIST}),
+  R("Identity", "GET", "/v1/tenants/{tenant_id}", "Get a tenant (admins, or the tenant itself)", {auth: "admin or own tenant"}),
+  R("Identity", "PATCH", "/v1/tenants/{tenant_id}", "Rename, suspend/reactivate or change tenant settings", {auth: "admin", ex: {
+    "Rename": {name: "Dev (renamed)"}, "Suspend": {status: "suspended"}, "Reactivate": {status: "active"},
+    "Rate limit": {settings: {rate_limit_per_minute: 120}}}}),
+  R("Identity", "DELETE", "/v1/tenants/{tenant_id}", "Delete a tenant (revokes all its keys)", {auth: "admin"}),
+  R("Identity", "POST", "/v1/tenants/{tenant_id}/webhook-secret", "Rotate the tenant's webhook signing secret (shown once)", {auth: "keys:write"}),
+  R("Identity", "POST", "/v1/api-keys", "Create an API key (the key is shown once)", {auth: "keys:write", idem: 1, ex: {
+    "Runtime key (voice worker)": {name: "livekit-worker", role: "runtime", expires_in_days: 90},
+    "Developer key": {name: "back-office", role: "developer"},
+    "Viewer key": {name: "dashboards", role: "viewer", expires_in_days: 30},
+    "Owner key": {name: "second-owner", role: "owner"}}}),
+  R("Identity", "GET", "/v1/api-keys", "List the tenant's API keys", {auth: "keys:read"}),
+  R("Identity", "GET", "/v1/api-keys/{key_id}", "Get an API key's metadata", {auth: "keys:read"}),
+  R("Identity", "DELETE", "/v1/api-keys/{key_id}", "Revoke an API key", {auth: "keys:write"}),
+  R("Identity", "POST", "/v1/realtime/tokens", "Mint a short-lived token for one realtime client", {auth: "inference", ex: {
+    "Any session": {ttl_s: 600},
+    "Pinned to an agent": {ttl_s: 600, agent_id: "@@agent_id"},
+    "Pinned to a session": {ttl_s: 600, session_id: "@@session_id"}}}),
+
+  R("Providers", "GET", "/v1/providers", "Configured LLM providers with live route health", {auth: "agents:read"}),
+  R("Providers", "GET", "/v1/providers/{provider_id}", "One provider", {auth: "agents:read", defaults: {provider_id: "vertex"}}),
+  R("Providers", "GET", "/v1/models", "Models (OpenAI list): Vertex models and agent:<id> pseudo-models", {auth: "inference"}),
+
+  R("Agents", "POST", "/v1/agents", "Create an agent", {auth: "agents:write", idem: 1, ex: {
+    "Receptionist": {name: "Reception", description: "Front desk of City Hospital",
+      instructions: "You are Priya, the voice receptionist of City Hospital, Chennai. Answer in one or two short sentences.",
+      params: {temperature: 0.4, max_tokens: 200, reasoning_effort: "minimal"},
+      tools: [{type: "builtin", name: "get_current_time"}, {type: "builtin", name: "end_conversation"}],
+      greeting: "Vanakkam, City Hospital. How can I help?", segmentation: true, metadata: {team: "front-desk"}},
+    "Client tool + handoff": {name: "Front desk",
+      instructions: "You answer calls. Transfer billing questions. Use transfer_to_human when the caller asks for a person.",
+      tools: [{type: "builtin", name: "get_current_time"},
+        {type: "client", name: "transfer_to_human", description: "Connect the caller to staff",
+          parameters: {type: "object", properties: {department: {type: "string"}}, required: ["department"]}}],
+      handoffs: [{agent_id: "@@agent_id", description: "bills, invoices and payments"}]},
+    "Every field": {name: "Full agent", description: "Shows every field",
+      instructions: "You are a helpful voice agent. Keep answers short.", model: "google/gemini-3.5-flash",
+      params: {temperature: 0.4, top_p: 0.95, max_tokens: 300, reasoning_effort: "minimal", parallel_tool_calls: true},
+      tools: [{type: "builtin", name: "get_current_time"}, {type: "tool", id: "@@tool_id"},
+        {type: "mcp", server_id: "@@server_id"}],
+      greeting: "Hello! How can I help?", segmentation: true, max_tool_rounds: 6,
+      on_session_end: {workflow_id: "@@workflow_id"}, metadata: {owner: "console"}}}}),
+  R("Agents", "GET", "/v1/agents", "List agents (newest first)", {auth: "agents:read", q: LIST}),
+  R("Agents", "GET", "/v1/agents/{agent_id}", "Get an agent (latest version)", {auth: "agents:read"}),
+  R("Agents", "PATCH", "/v1/agents/{agent_id}", "Update an agent (creates a new version)", {auth: "agents:write", ifMatch: 1, ex: {
+    "Instructions": {instructions: "You are Priya, the voice receptionist of City Hospital. Speak Tamil if the caller does."},
+    "Params": {params: {temperature: 0.2, max_tokens: 150, reasoning_effort: "low"}},
+    "Tools": {tools: [{type: "builtin", name: "get_current_time"}]}}}),
+  R("Agents", "DELETE", "/v1/agents/{agent_id}", "Delete an agent (running sessions keep their version)", {auth: "agents:write", ifMatch: 1}),
+  R("Agents", "GET", "/v1/agents/{agent_id}/versions", "List an agent's versions (oldest first)", {auth: "agents:read", q: LIST}),
+  R("Agents", "GET", "/v1/agents/{agent_id}/versions/{version}", "Get one agent version", {auth: "agents:read", defaults: {version: "1"}}),
+
+  R("Tools", "GET", "/v1/tools/builtin", "Built-in server tools agents can enable", {auth: "tools:read"}),
+  R("Tools", "POST", "/v1/tools", "Create an HTTP or client tool", {auth: "tools:write", idem: 1, ex: {
+    "HTTP tool (GET)": {name: "lookup_ip", description: "Look up the server's public IP (demo)",
+      parameters: {type: "object", properties: {}}, kind: "http",
+      http: {url: "https://httpbin.org/get", method: "GET"}, timeout_s: 5},
+    "HTTP tool (POST, signed)": {name: "book_appointment", description: "Book a doctor's appointment for the caller",
+      parameters: {type: "object", properties: {doctor: {type: "string"}, date: {type: "string", format: "date"}}, required: ["doctor", "date"]},
+      kind: "http", http: {url: "https://crm.example.com/appointments", method: "POST", headers: {"X-Source": "voice"}, body_mode: "arguments"},
+      secret_headers: {Authorization: "Bearer crm-token"}, signing_secret: "a-long-random-string-for-hmac", side_effects: true, timeout_s: 5},
+    "Client tool": {name: "transfer_to_human", description: "Connect the caller to staff", kind: "client",
+      parameters: {type: "object", properties: {department: {type: "string"}}, required: ["department"]}}}}),
+  R("Tools", "GET", "/v1/tools", "List tools", {auth: "tools:read", q: LIST}),
+  R("Tools", "GET", "/v1/tools/{tool_id}", "Get a tool", {auth: "tools:read"}),
+  R("Tools", "PATCH", "/v1/tools/{tool_id}", "Update a tool", {auth: "tools:write", ifMatch: 1, ex: {
+    "Description": {description: "Updated from the console"}, "Timeout": {timeout_s: 8}, "Side effects": {side_effects: true}}}),
+  R("Tools", "DELETE", "/v1/tools/{tool_id}", "Delete a tool", {auth: "tools:write", ifMatch: 1}),
+  R("Tools", "POST", "/v1/tools/{tool_id}/invoke", "Run an HTTP tool once with given arguments (testing)", {auth: "tools:write", ex: {
+    "No arguments": {arguments: {}}, "Appointment": {arguments: {doctor: "Dr. Rao", date: today(1)}}}}),
+
+  R("MCP", "POST", "/v1/mcp/servers", "Register an MCP server (Streamable HTTP or SSE)", {auth: "mcp:write", idem: 1,
+    q: [["verify", "false", "connect and list tools now"]], ex: {
+    "Streamable HTTP": {name: "crm", url: "https://mcp.example.com/mcp", transport: "streamable_http",
+      secret_headers: {Authorization: "Bearer ..."}, tool_prefix: "crm_", tool_allowlist: ["lookup_patient", "create_ticket"],
+      side_effect_tools: ["create_ticket"], timeout_s: 15},
+    "SSE (legacy)": {name: "legacy", url: "https://mcp.example.com/sse", transport: "sse"}}}),
+  R("MCP", "GET", "/v1/mcp/servers", "List MCP servers", {auth: "mcp:read", q: LIST}),
+  R("MCP", "GET", "/v1/mcp/servers/{server_id}", "Get an MCP server", {auth: "mcp:read"}),
+  R("MCP", "PATCH", "/v1/mcp/servers/{server_id}", "Update an MCP server (reconnects)", {auth: "mcp:write", ifMatch: 1, ex: {
+    "Disable": {enabled: false}, "Enable": {enabled: true}, "Allowlist": {tool_allowlist: ["lookup_patient"]}}}),
+  R("MCP", "DELETE", "/v1/mcp/servers/{server_id}", "Remove an MCP server", {auth: "mcp:write", ifMatch: 1}),
+  R("MCP", "GET", "/v1/mcp/servers/{server_id}/tools", "Tools the server exposes (cached listing)", {auth: "mcp:read"}),
+  R("MCP", "POST", "/v1/mcp/servers/{server_id}/refresh", "Reconnect and re-list the server's tools", {auth: "mcp:write"}),
+
+  R("Workflows", "POST", "/v1/workflows", "Create a workflow", {auth: "workflows:write", idem: 1, ex: {
+    "Post-call summary": {name: "Post-call summary", description: "Summarise a call and flag urgent ones",
+      steps: [
+        {id: "summary", type: "llm", instructions: "Summarise the call in two sentences.", prompt: "{{ input.transcript }}"},
+        {id: "time", type: "tool", tool: {type: "builtin", name: "get_current_time"}, arguments: {timezone: "Asia/Kolkata"}},
+        {id: "check", type: "condition", if: {left: "{{ input.priority }}", op: "eq", right: "high"}, then: "flag", else: "end"},
+        {id: "flag", type: "set", value: {escalate: true, summary: "{{ steps.summary.output }}"}}],
+      output: {summary: "{{ steps.summary.output }}", at: "{{ steps.time.output }}", flag: "{{ steps.flag.output }}"}},
+    "Structured extraction": {name: "Lead extraction",
+      steps: [{id: "extract", type: "llm", prompt: "Extract the caller's name and need from: {{ input.transcript }}",
+        response_format: {type: "json_schema", json_schema: {name: "lead", schema: {type: "object",
+          properties: {name: {type: "string"}, need: {type: "string"}}, required: ["name", "need"]}}}}],
+      output: "{{ steps.extract.output }}"},
+    "Agent step": {name: "Agent reply", steps: [{id: "reply", type: "agent", agent_id: "@@agent_id", input: "{{ input.question }}"}],
+      output: "{{ steps.reply.output }}"}}}),
+  R("Workflows", "GET", "/v1/workflows", "List workflows", {auth: "workflows:read", q: LIST}),
+  R("Workflows", "GET", "/v1/workflows/{workflow_id}", "Get a workflow", {auth: "workflows:read"}),
+  R("Workflows", "PATCH", "/v1/workflows/{workflow_id}", "Update a workflow (running executions keep their snapshot)", {auth: "workflows:write", ifMatch: 1, ex: {
+    "Description": {description: "Updated from the console"}}}),
+  R("Workflows", "DELETE", "/v1/workflows/{workflow_id}", "Delete a workflow", {auth: "workflows:write", ifMatch: 1}),
+  R("Workflows", "POST", "/v1/workflows/{workflow_id}/run", "Start an asynchronous run (→ execution)", {auth: "executions:write", idem: 1, ex: {
+    "Summary input": {input: {transcript: "Caller: My father has chest pain, we need a cardiologist today.\nAgent: Dr. Rao is free at 4 pm. Shall I book it?\nCaller: Yes please.", priority: "high"}, metadata: {source: "console"}},
+    "Question input": {input: {question: "What time is it in Chennai?"}},
+    "With webhook": {input: {transcript: "Caller: Thanks, bye.", priority: "low"}, callback_url: "https://example.com/webhooks/aica"}}}),
+
+  R("Executions", "POST", "/v1/executions", "Start an agent or workflow execution", {auth: "executions:write", idem: 1, ex: {
+    "Agent run": {type: "agent", agent_id: "@@agent_id", input: "What time is it in Chennai?", metadata: {source: "console"}},
+    "Agent run (JSON output)": {type: "agent", agent_id: "@@agent_id", input: "List two Chennai hospitals.",
+      response_format: {type: "json_object"}},
+    "Agent run in a session": {type: "agent", agent_id: "@@agent_id", session_id: "@@session_id", input: "And tomorrow?"},
+    "Workflow run": {type: "workflow", workflow_id: "@@workflow_id", input: {transcript: "Caller: Book me for Monday.", priority: "high"}}}}),
+  R("Executions", "GET", "/v1/executions", "List executions (newest first)", {auth: "executions:read", q: LIST}),
+  R("Executions", "GET", "/v1/executions/{execution_id}", "Get an execution (status, steps, result, error)", {auth: "executions:read"}),
+  R("Executions", "POST", "/v1/executions/{execution_id}/cancel", "Cancel a queued or running execution", {auth: "executions:write"}),
+  R("Executions", "GET", "/v1/executions/{execution_id}/events", "Progress as Server-Sent Events until the execution ends", {auth: "executions:read", sse: 1}),
+
+  R("Sessions", "POST", "/v1/sessions", "Create a session (optionally bound to an agent)", {auth: "sessions:write", idem: 1, ex: {
+    "Bound to an agent": {agent_id: "@@agent_id", session_id: "@@new_session", metadata: {caller: "+91 98400 00000"}},
+    "Agent-less": {session_id: "@@new_session", instructions: "You are a helpful assistant. Answer in one short sentence.", segmentation: true},
+    "Seeded history": {agent_id: "@@agent_id", session_id: "@@new_session",
+      messages: [{role: "user", content: "I need a cardiologist."}, {role: "assistant", content: "Sure, for which day?"}]},
+    "Client tools + params": {agent_id: "@@agent_id", session_id: "@@new_session", params: {temperature: 0.3},
+      tools: [{type: "function", function: {name: "hang_up", description: "End the phone call",
+        parameters: {type: "object", properties: {}}}}]}}}),
+  R("Sessions", "GET", "/v1/sessions", "List sessions (newest first)", {auth: "sessions:read", q: LIST}),
+  R("Sessions", "GET", "/v1/sessions/{session_id}", "Get a session", {auth: "sessions:read", q: [["include_messages", "false"]]}),
+  R("Sessions", "PATCH", "/v1/sessions/{session_id}", "Update instructions, client tools, params, metadata or segmentation", {auth: "sessions:write", ex: {
+    "Instructions": {instructions: "Speak Tamil if the caller does."}, "Params": {params: {temperature: 0.2, max_tokens: 120}},
+    "Metadata": {metadata: {crm_id: "C-1042"}}, "No segmentation": {segmentation: false}}}),
+  R("Sessions", "DELETE", "/v1/sessions/{session_id}", "Delete a session and its history", {auth: "sessions:write"}),
+  R("Sessions", "POST", "/v1/sessions/{session_id}/end", "End a session (runs the agent's on_session_end workflow)", {auth: "sessions:write", ex: {
+    "End": {reason: "ended_by_client"}}}),
+  R("Sessions", "GET", "/v1/sessions/{session_id}/messages", "Conversation history (paginated by seq)", {auth: "sessions:read", q: [["after_seq", "0"], ["limit", "200"]]}),
+  R("Sessions", "POST", "/v1/sessions/{session_id}/messages", "Append messages without generating", {auth: "sessions:write", ex: {
+    "User + assistant": {messages: [{role: "user", content: "Is Dr. Rao available?"}, {role: "assistant", content: "Let me check."}]}}}),
+  R("Sessions", "DELETE", "/v1/sessions/{session_id}/messages", "Clear the conversation (keeps configuration)", {auth: "sessions:write"}),
+  R("Sessions", "POST", "/v1/sessions/{session_id}/responses", "Generate the next assistant turn (SSE when stream=true)", {auth: "sessions:write", idem: 1, sse: 1, ex: {
+    "Utterance (stream)": {input: "What time is it in Chennai?", stream: true},
+    "Utterance (JSON)": {input: "Which department handles heart problems?", stream: false},
+    "Say greeting (no model)": {say: "Vanakkam, City Hospital. How can I help?"},
+    "Model opens": {},
+    "Per-turn instructions": {input: "Book me with Dr. Rao tomorrow.", instructions: "Confirm the date back to the caller.", params: {temperature: 0.2}},
+    "OpenAI message list": {input: [{role: "user", content: "Hi, I'm Ravi."}, {role: "user", content: "Can you call me back?"}]},
+    "Force a tool": {input: "What's the time?", tool_choice: "required"}}}),
+  R("Sessions", "GET", "/v1/sessions/{session_id}/responses", "Past responses (status, usage, timings)", {auth: "sessions:read", q: LIST}),
+  R("Sessions", "GET", "/v1/sessions/{session_id}/responses/{response_id}", "One past response", {auth: "sessions:read"}),
+  R("Sessions", "POST", "/v1/sessions/{session_id}/cancel", "Cancel the running response (barge-in)", {auth: "sessions:write", ex: {
+    "Cancel": {}, "Barge-in (heard part)": {response_id: "@@response_id", spoken_text: "Dr. Rao is free"},
+    "Discard speculative turn": {response_id: "@@response_id", discard: true}}}),
+  R("Sessions", "POST", "/v1/sessions/{session_id}/truncate", "Keep only the heard part of the last assistant reply", {auth: "sessions:write", ex: {
+    "Truncate": {spoken_text: "Dr. Rao is free"}}}),
+  R("Sessions", "POST", "/v1/sessions/{session_id}/tool_results", "Submit client tool results (and continue the turn)", {auth: "sessions:write", sse: 1, ex: {
+    "Result + continue (stream)": {results: [{call_id: "@@call_id", output: {status: "transferred"}, is_error: false}], continue: true, stream: true},
+    "Error result": {results: [{call_id: "@@call_id", output: "line busy", is_error: true}], continue: true, stream: false},
+    "Record only": {results: [{call_id: "@@call_id", output: "ok"}], continue: false}}}),
+  R("Sessions", "POST", "/v1/sessions/{session_id}/handoff", "Switch the session's active agent", {auth: "sessions:write", ex: {
+    "Handoff": {agent_id: "@@agent_id", reason: "billing question", cancel_active: false}}}),
+  R("Sessions", "GET", "/v1/sessions/{session_id}/tool_calls", "Executed server tool calls (audit trail)", {auth: "sessions:read", q: [["limit", "200"]]}),
+
+  R("Chat (OpenAI)", "POST", "/v1/chat/completions", "Chat completions (OpenAI-compatible; SSE when stream=true)", {auth: "inference", sse: 1, chat: 1, ex: {
+    "Direct model (stream)": {model: "default", stream: true, stream_options: {include_usage: true},
+      messages: [{role: "system", content: "You are a concise assistant."}, {role: "user", content: "Name three Chennai landmarks."}]},
+    "Direct model (JSON)": {model: "google/gemini-3.5-flash", stream: false, max_tokens: 200, temperature: 0.3, reasoning_effort: "minimal",
+      messages: [{role: "user", content: "Say hello in Tamil."}]},
+    "Agent (server-side tools)": {model: "@@agent_model", stream: true, messages: [{role: "user", content: "What time is it in Chennai?"}]},
+    "Function calling": {model: "default", stream: false, tool_choice: "auto",
+      tools: [{type: "function", function: {name: "get_weather", description: "Weather for a city",
+        parameters: {type: "object", properties: {city: {type: "string"}}, required: ["city"]}}}],
+      messages: [{role: "user", content: "Is it raining in Chennai?"}]},
+    "Structured output": {model: "default", stream: false,
+      response_format: {type: "json_schema", json_schema: {name: "city", schema: {type: "object",
+        properties: {city: {type: "string"}, state: {type: "string"}}, required: ["city", "state"]}}},
+      messages: [{role: "user", content: "Where is Marina Beach?"}]}}}),
+  R("Chat (OpenAI)", "POST", "/v1/requests/{request_id}/cancel", "Cancel an in-flight generation by request/response id", {auth: "inference"}),
+
+  R("Usage", "GET", "/v1/usage", "Token and request usage by day, model, agent or API", {auth: "usage:read",
+    q: [["start", today(-7)], ["end", today()], ["group_by", "day", "day | model | agent | api"]], qFill: 1}),
+
+  {g: "Realtime", m: "WS", p: "/v1/realtime", s: "Realtime WebSocket (aica.realtime.v1)", id: "WS /v1/realtime"},
+];
+
+/* -------------------------------------------------------------- id capture */
+const PREFIX = {ten: "tenant_id", key: "key_id", agent: "agent_id", tool: "tool_id", mcp: "server_id", workflow: "workflow_id",
+  exec: "execution_id", sess: "session_id", resp: "response_id", call: "call_id", req: "request_id"};
+const FIELD = new Set(["tenant_id", "key_id", "agent_id", "tool_id", "server_id", "workflow_id", "execution_id",
+  "session_id", "response_id", "call_id", "current_agent_id"]);
+const OBJECT = {session: "session_id", agent: "agent_id", tool: "tool_id", workflow: "workflow_id", execution: "execution_id",
+  tenant: "tenant_id", api_key: "key_id", mcp_server: "server_id", response: "response_id"};
+const ids = store.get("aica.ids", {});
+const etags = store.get("aica.etags", {});
+
+function remember(kind, value) {
+  if (!kind || typeof value !== "string" || !value || value.length > 128 || value.startsWith("<")) return;
+  const list = (ids[kind] = (ids[kind] || []).filter(v => v !== value));
+  list.unshift(value);
+  list.length = Math.min(list.length, 25);
+}
+function capture(value, depth = 0) {
+  if (depth > 8 || value == null) return;
+  if (Array.isArray(value)) { value.slice(0, 200).forEach(v => capture(v, depth + 1)); return; }
+  if (typeof value !== "object") return;
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === "string") {
+      if (FIELD.has(k)) remember(k === "current_agent_id" ? "agent_id" : k, v);
+      else if (k === "id") {
+        const m = /^([a-z]+)_[0-9a-f]{24}$/.exec(v);
+        remember(OBJECT[value.object] || (m && PREFIX[m[1]]), v);
+      }
+    } else if (k === "pending_tool_calls" && Array.isArray(v)) v.forEach(c => remember("call_id", c));
+    else capture(v, depth + 1);
+  }
+}
+function saveIds() {
+  store.set("aica.ids", ids);
+  store.set("aica.etags", etags);
+  renderCaptured();
+  const box = $("#datalists");
+  box.replaceChildren(...Object.entries(ids).map(([k, list]) =>
+    el("datalist", {id: "dl-" + k}, list.map(v => el("option", {value: v})))));
+}
+function latest(kind) { return (ids[kind] || [])[0]; }
+function renderCaptured() {
+  const kinds = Object.keys(ids).filter(k => ids[k].length);
+  const box = $("#captured");
+  if (!kinds.length) return;
+  box.replaceChildren(...kinds.map(k => el("div", {class: "mono", style: "margin:2px 0"},
+    el("span", {class: "muted"}, k.replace(/_id$/, ""), " "), el("span", {}, ids[k][0]),
+    ids[k].length > 1 ? el("span", {class: "muted"}, ` +${ids[k].length - 1}`) : null)),
+    el("button", {type: "button", class: "small", style: "margin-top:4px", onclick: () => {
+      for (const k of Object.keys(ids)) delete ids[k];
+      saveIds(); $("#captured").textContent = "Cleared.";
+    }}, "forget ids"));
+}
+
+/* fill @@placeholders in example bodies with the latest captured ids */
+function fillExample(obj) {
+  return JSON.parse(JSON.stringify(obj), (k, v) => {
+    if (typeof v !== "string" || !v.startsWith("@@")) return v;
+    const name = v.slice(2);
+    if (name === "new_session") return "console-" + rand(4);
+    if (name === "agent_model") return "agent:" + (latest("agent_id") || "<agent_id>");
+    return latest(name) || `<${name}>`;
+  });
+}
+
+/* --------------------------------------------------------------------- auth */
+const keyInput = $("#key"), tenantInput = $("#tenant"), rememberBox = $("#remember");
+function authHeaders() {
+  const h = {};
+  if (keyInput.value.trim()) h["Authorization"] = "Bearer " + keyInput.value.trim();
+  if (tenantInput.value.trim()) h["X-Tenant-ID"] = tenantInput.value.trim();
+  return h;
+}
+function saveAuth() {
+  const persist = rememberBox.checked;
+  store.set("aica.key", keyInput.value.trim(), persist);
+  store.set("aica.tenant", tenantInput.value.trim(), persist);
+  store.set("aica.remember", persist, true);
+}
+let whoTimer;
+async function refreshWho() {
+  const who = $("#who");
+  if (!keyInput.value.trim()) { who.className = "pill"; who.textContent = "no key"; return; }
+  try {
+    const r = await fetch("/v1/me", {headers: authHeaders()});
+    const b = await r.json().catch(() => ({}));
+    if (r.ok) {
+      who.className = "pill ok";
+      who.textContent = [b.kind === "admin" || (b.scopes || []).includes("admin") ? "admin" : b.role, b.tenant_id].filter(Boolean).join(" · ") || b.kind;
+      who.title = (b.scopes || []).join(" ");
+      if (b.tenant_id) remember("tenant_id", b.tenant_id);
+    } else {
+      who.className = "pill err";
+      who.textContent = (b.error && b.error.code) || r.status;
+      who.title = (b.error && b.error.message) || "";
+    }
+  } catch (e) { who.className = "pill err"; who.textContent = "offline"; }
+}
+async function refreshReady() {
+  const p = $("#ready");
+  try {
+    const r = await fetch("/health/ready");
+    const b = await r.json().catch(() => ({}));
+    p.className = "pill " + (r.ok ? "ok" : "err");
+    p.textContent = r.ok ? `ready · ${b.model || ""}` : (b.status || "not ready");
+    p.title = (b.reasons || []).join("\n");
+  } catch { p.className = "pill err"; p.textContent = "unreachable"; }
+}
+
+/* --------------------------------------------------------------- route view */
+let current = null;           // selected route
+let inflight = null;          // AbortController of the running request
+let history = store.get("aica.history", []);
+
+function renderRoutes() {
+  const f = $("#filter").value.trim().toLowerCase();
+  const box = $("#routes");
+  box.replaceChildren();
+  let group = null;
+  for (const r of ROUTES) {
+    if (f && !(`${r.m} ${r.p} ${r.s} ${r.g}`).toLowerCase().includes(f)) continue;
+    if (r.g !== group) { group = r.g; box.append(el("div", {class: "group"}, group)); }
+    box.append(el("div", {class: "route" + (current && current.id === r.id ? " sel" : ""), title: r.s,
+      onclick: () => select(r)}, el("span", {class: "m " + r.m}, r.m), el("span", {}, r.p)));
+  }
+}
+
+function params(path) { return [...path.matchAll(/\{(\w+)\}/g)].map(m => m[1]); }
+
+function select(route, restore) {
+  current = route;
+  location.hash = encodeURIComponent(route.id);
+  renderRoutes();
+  const isWs = route.m === "WS";
+  $("#http").hidden = isWs;
+  $("#ws").hidden = !isWs;
+  if (isWs) { refreshWsTemplates(); return; }
+
+  $("#rMethod").className = "m " + route.m;
+  $("#rMethod").textContent = route.m;
+  $("#rPath").textContent = route.p;
+  $("#rSummary").textContent = route.s;
+  $("#rMeta").replaceChildren(
+    el("span", {}, "permission ", el("b", {}, route.auth || "—")),
+    route.sse ? el("span", {}, el("b", {}, "streams"), " (SSE)") : null,
+    route.idem ? el("span", {}, "accepts ", el("b", {}, "Idempotency-Key")) : null,
+    route.ifMatch ? el("span", {}, "accepts ", el("b", {}, "If-Match")) : null);
+
+  const pf = $("#pathFields");
+  pf.replaceChildren();
+  const ps = params(route.p);
+  $("#pathBox").hidden = !ps.length;
+  for (const p of ps) {
+    const kind = p === "request_id" ? "request_id" : p;
+    const value = restore?.path?.[p] ?? (route.defaults || {})[p] ?? latest(kind) ?? "";
+    const input = el("input", {id: "p-" + p, value, list: "dl-" + kind, placeholder: p, spellcheck: "false",
+      oninput: () => fillIfMatch()});
+    pf.append(el("label", {for: "p-" + p}, p), input);
+  }
+
+  const qf = $("#queryFields");
+  qf.replaceChildren();
+  $("#queryBox").hidden = !(route.q && route.q.length);
+  for (const [n, d, hint] of route.q || []) {
+    const value = restore?.query?.[n] ?? (route.qFill ? d : "");
+    qf.append(el("label", {for: "q-" + n}, n), el("input", {id: "q-" + n, value, spellcheck: "false",
+      placeholder: hint ? `${d} — ${hint}` : d ? `default ${d}` : ""}));
+  }
+
+  const hasBody = ["POST", "PATCH", "PUT"].includes(route.m);
+  $("#bodyBox").hidden = !hasBody;
+  const sel = $("#exSel");
+  sel.replaceChildren();
+  const examples = route.ex || {};
+  const names = Object.keys(examples);
+  for (const n of names) sel.append(el("option", {value: n}, n));
+  sel.hidden = !names.length;
+  if (restore && restore.body != null) $("#body").value = restore.body;
+  else $("#body").value = names.length ? JSON.stringify(fillExample(examples[names[0]]), null, 2) : (hasBody ? "{}" : "");
+  $("#bodyHint").textContent = names.length ? "Placeholders like <agent_id> mean no id of that kind was captured yet: create one first, or type it." : "";
+
+  $$("[data-idem]").forEach(n => n.hidden = !route.idem);
+  $$("[data-ifmatch]").forEach(n => n.hidden = !route.ifMatch);
+  $("#hIdem").value = restore?.headers?.idem || "";
+  $("#hReqId").value = restore?.headers?.reqId || "";
+  $("#hIfMatch").value = "";
+  fillIfMatch();
+  $("#cancelGen").hidden = true;
+}
+
+function fillIfMatch() {
+  if (!current || !current.ifMatch) return;
+  const id = params(current.p).map(p => $("#p-" + p)?.value.trim()).filter(Boolean).pop();
+  if (id && etags[id]) $("#hIfMatch").value = etags[id];
+}
+
+function buildRequest() {
+  const route = current;
+  const pathVals = {};
+  let missing = null;
+  const path = route.p.replace(/\{(\w+)\}/g, (_, p) => {
+    const v = $("#p-" + p).value.trim();
+    pathVals[p] = v;
+    if (!v) missing = p;
+    return encodeURIComponent(v);
+  });
+  if (missing) throw new Error(`path parameter ${missing} is empty`);
+  const query = {};
+  const qs = new URLSearchParams();
+  for (const [n] of route.q || []) {
+    const v = $("#q-" + n).value.trim();
+    if (v) { qs.set(n, v); query[n] = v; }
+  }
+  const url = path + (qs.toString() ? "?" + qs : "");
+  const headers = {...authHeaders()};
+  const reqId = $("#hReqId").value.trim() || (route.chat ? "console-" + rand(8) : "");
+  if (reqId) headers["X-Request-ID"] = reqId;
+  if (route.idem && $("#hIdem").value.trim()) headers["Idempotency-Key"] = $("#hIdem").value.trim();
+  if (route.ifMatch && $("#hIfMatch").value.trim()) headers["If-Match"] = $("#hIfMatch").value.trim();
+  for (const line of $("#hExtra").value.split("\n")) {
+    const i = line.indexOf(":");
+    if (i > 0) headers[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  let body = null, rawBody = null;
+  if (!$("#bodyBox").hidden) {
+    rawBody = $("#body").value;
+    if (rawBody.trim()) {
+      try { body = JSON.parse(rawBody); } catch (e) { throw new Error("body is not valid JSON: " + e.message); }
+      headers["Content-Type"] = "application/json";
+    }
+  }
+  return {route, url, headers, body, rawBody, pathVals, query, reqId};
+}
+
+/* ------------------------------------------------------------------ sending */
+function setTab(name) {
+  $$("#resTabs [data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
+  $$("#resCard [data-pane]").forEach(p => p.hidden = p.dataset.pane !== name);
+}
+function resetResponse() {
+  $("#resStatus").className = "status muted";
+  $("#resStatus").textContent = "sending…";
+  $("#resTime").textContent = "";
+  $("#resHdrs").replaceChildren();
+  $("#resBanner").replaceChildren();
+  $("#resBody").className = ""; $("#resBody").textContent = "";
+  $("#resText").textContent = ""; $("#resTextMeta").replaceChildren();
+  $("#resEvents").replaceChildren();
+  $("#resAllHdrs").textContent = "";
+  $('#resTabs [data-tab="text"]').hidden = true;
+  $('#resTabs [data-tab="events"]').hidden = true;
+  setTab("body");
+}
+
+async function send() {
+  if (!current || current.m === "WS") return;
+  let req;
+  try { req = buildRequest(); } catch (e) { resetResponse(); showError(e.message); return; }
+  saveAuth();
+  resetResponse();
+  inflight?.abort();
+  const ctrl = (inflight = new AbortController());
+  $("#abort").disabled = false;
+  $("#send").disabled = true;
+  const t0 = performance.now();
+  let status = 0;
+  try {
+    const res = await fetch(req.url, {method: req.route.m, headers: req.headers,
+      body: req.body != null ? JSON.stringify(req.body) : undefined, signal: ctrl.signal});
+    status = res.status;
+    showHead(res, t0);
+    const etag = res.headers.get("etag");
+    const ctype = res.headers.get("content-type") || "";
+    if (ctype.includes("text/event-stream")) {
+      await readSse(res, req, t0, ctrl);
+    } else {
+      const text = await res.text();
+      $("#resTime").textContent = `${Math.round(performance.now() - t0)} ms · ${text.length} B`;
+      if (ctype.includes("json") && text) {
+        let data;
+        try { data = JSON.parse(text); } catch { data = null; }
+        if (data != null) {
+          $("#resBody").innerHTML = highlight(data);
+          capture(data);
+          if (etag && data.id) etags[data.id] = etag;
+          secretsBanner(data);
+        } else $("#resBody").textContent = text;
+      } else $("#resBody").textContent = text || (status === 204 ? "(204 No Content)" : "(empty body)");
+    }
+  } catch (e) {
+    if (e.name === "AbortError") {
+      $("#resTextMeta").append(el("span", {}, el("b", {}, "stopped by you")));
+    } else showError(e.message);
+  } finally {
+    if (inflight === ctrl) inflight = null;
+    $("#abort").disabled = true;
+    $("#send").disabled = false;
+    for (const [p, v] of Object.entries(req.pathVals)) remember(p, v);
+    saveIds();
+    addHistory(req, status, Math.round(performance.now() - t0));
+  }
+}
+
+function showError(msg) {
+  $("#resStatus").className = "status s0";
+  $("#resStatus").textContent = "Request not sent";
+  $("#resBody").className = "";
+  $("#resBody").textContent = msg;
+}
+
+function showHead(res, t0) {
+  const st = $("#resStatus");
+  st.className = "status s" + String(res.status)[0];
+  st.textContent = `${res.status} ${res.statusText}`;
+  $("#resTime").textContent = `${Math.round(performance.now() - t0)} ms`;
+  const keep = ["x-request-id", "etag", "retry-after", "idempotent-replayed", "content-type"];
+  $("#resHdrs").replaceChildren(...keep.filter(k => res.headers.get(k)).map(k =>
+    el("div", {}, k, ": ", el("b", {}, res.headers.get(k)))));
+  $("#resAllHdrs").textContent = [...res.headers].map(([k, v]) => `${k}: ${v}`).join("\n");
+  const rid = res.headers.get("x-request-id");
+  if (rid) remember("request_id", rid);
+}
+
+function secretsBanner(data) {
+  const box = $("#resBanner");
+  const key = data?.api_key?.key || (typeof data?.key === "string" && data.key.startsWith("aica_") ? data.key : null);
+  if (key) {
+    box.append(el("div", {class: "banner"}, "New API key (shown only now): ", el("code", {}, key), " ",
+      el("button", {type: "button", onclick: () => {
+        keyInput.value = key; tenantInput.value = ""; saveAuth(); refreshWho();
+      }}, "use this key"), " ",
+      el("button", {type: "button", onclick: () => navigator.clipboard?.writeText(key)}, "copy")));
+  }
+  const secret = data?.webhook_secret;
+  if (typeof secret === "string") {
+    box.append(el("div", {class: "banner"}, "Webhook signing secret (shown only now): ", el("code", {}, secret)));
+  }
+  if (data?.token && data?.expires_at) {
+    box.append(el("div", {class: "banner"}, "Realtime token minted. ",
+      el("button", {type: "button", onclick: () => {
+        $("#wsAuth").value = "token"; $("#wsToken").value = data.token; syncWsAuth();
+        select(ROUTES.find(r => r.m === "WS"));
+      }}, "open the realtime tester with it")));
+  }
+}
+
+/* SSE over fetch: session responses, tool results, chat completions, execution events */
+async function readSse(res, req, t0, ctrl) {
+  $('#resTabs [data-tab="text"]').hidden = false;
+  $('#resTabs [data-tab="events"]').hidden = false;
+  setTab("text");
+  $("#resBody").textContent = "(streaming: see Streamed text and Events)";
+  const textBox = $("#resText"), evBox = $("#resEvents"), meta = $("#resTextMeta");
+  const events = [];
+  let firstEvent = null, firstText = null, responseId = null, finalUsage = null;
+  const sessionId = req.pathVals.session_id;
+
+  const cancelBtn = $("#cancelGen");
+  if (req.route.chat && req.reqId) {
+    cancelBtn.hidden = false; cancelBtn.textContent = "Cancel generation (by X-Request-ID)";
+    cancelBtn.onclick = () => fetch(`/v1/requests/${encodeURIComponent(req.reqId)}/cancel`, {method: "POST", headers: authHeaders()});
+  } else if (sessionId) {
+    cancelBtn.hidden = false; cancelBtn.textContent = "Barge-in (POST …/cancel)";
+    cancelBtn.onclick = () => fetch(`/v1/sessions/${encodeURIComponent(sessionId)}/cancel`, {method: "POST",
+      headers: {...authHeaders(), "Content-Type": "application/json"},
+      body: JSON.stringify({response_id: responseId || undefined, spoken_text: textBox.textContent || undefined})});
+  } else if (req.pathVals.execution_id) {
+    cancelBtn.hidden = false; cancelBtn.textContent = "Cancel execution";
+    cancelBtn.onclick = () => fetch(`/v1/executions/${encodeURIComponent(req.pathVals.execution_id)}/cancel`, {method: "POST", headers: authHeaders()});
+  }
+
+  const appendText = s => {
+    if (firstText == null) { firstText = performance.now() - t0; }
+    textBox.append(s);
+  };
+  const chip = (s, cls = "") => textBox.append(el("span", {class: "chip " + cls}, s));
+
+  function onEvent(name, data) {
+    const ms = Math.round(performance.now() - t0);
+    if (firstEvent == null) firstEvent = ms;
+    let parsed = data;
+    try { parsed = JSON.parse(data); } catch {}
+    events.push({event: name, data: parsed});
+    const type = name || (parsed && parsed.type) || (parsed && parsed.object) || "message";
+    const isDelta = type === "response.text.delta" || type === "chat.completion.chunk";
+    evBox.append(el("details", {class: "ev" + (type === "error" || (parsed && parsed.error) ? " error" : "")},
+      el("summary", {}, el("span", {class: "t"}, ms + "ms"), el("span", {class: "n"}, type),
+        el("span", {class: "d"}, short(isDelta && parsed?.delta != null ? JSON.stringify(parsed.delta) : data, 160))),
+      el("pre", {}, typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2))));
+    if (parsed === "[DONE]" || typeof parsed !== "object" || parsed == null) return;
+    capture(parsed);
+    if (parsed.error) chip("error: " + (parsed.error.code || "") + " " + (parsed.error.message || ""), "err");
+    // OpenAI chat chunk
+    if (parsed.object === "chat.completion.chunk") {
+      for (const c of parsed.choices || []) {
+        if (c.delta?.content) appendText(c.delta.content);
+        for (const tc of c.delta?.tool_calls || []) chip(`tool_call ${tc.function?.name || ""}${tc.function?.arguments || ""}`);
+        if (c.finish_reason) meta.append(el("span", {}, "finish_reason ", el("b", {}, c.finish_reason)));
+      }
+      if (parsed.usage) finalUsage = parsed.usage;
+      return;
+    }
+    switch (type) {
+      case "response.created": responseId = parsed.response_id; break;
+      case "response.text.delta": appendText(parsed.delta); break;
+      case "response.tool_call.started": chip(`⋯ ${parsed.name}`); break;
+      case "response.tool_call": chip(`${parsed.name}(${parsed.arguments}) · ${parsed.kind}/${parsed.side}`); break;
+      case "response.tool_result": chip(`→ ${short(parsed.output, 120)} · ${Math.round(parsed.duration_ms || 0)}ms${parsed.replayed ? " · replayed" : ""}`, parsed.is_error ? "err" : ""); break;
+      case "agent.handoff": chip(`handoff → ${parsed.to_agent?.name || parsed.to_agent?.id || ""}`); break;
+      case "session.end_requested": chip("session.end_requested"); break;
+      case "response.done":
+        meta.append(el("span", {}, "status ", el("b", {}, parsed.status)),
+          el("span", {}, "finish ", el("b", {}, parsed.finish_reason ?? "—")));
+        if (parsed.timings) meta.append(el("span", {}, "server ttft ", el("b", {}, Math.round(parsed.timings.ttft_ms ?? 0) + "ms")),
+          el("span", {}, "total ", el("b", {}, Math.round(parsed.timings.total_ms ?? 0) + "ms")));
+        if (parsed.usage) finalUsage = parsed.usage;
+        if (parsed.status === "requires_action" && parsed.tool_calls?.length)
+          meta.append(el("span", {}, el("b", {}, "requires_action"), ": answer with …/tool_results (call_id captured)"));
+        if (parsed.cancel_reason) meta.append(el("span", {}, "cancel_reason ", el("b", {}, parsed.cancel_reason)));
+        break;
+      default:
+        if (type.startsWith("step.") || type.startsWith("execution.") || type === "agent.response")
+          textBox.append(el("div", {class: "mono small"}, `${ms}ms  ${type}  ${short(parsed.step_id ? {step: parsed.step_id, ...("output" in parsed ? {output: parsed.output} : {}), ...(parsed.error ? {error: parsed.error} : {})} : parsed, 200)}`));
+    }
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, {stream: true}).replace(/\r\n/g, "\n");
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      let name = "", data = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith(":")) continue;                 // keepalive comment
+        if (line.startsWith("event:")) name = line.slice(6).trim();
+        else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+      }
+      if (data.length || name) onEvent(name, data.join("\n"));
+    }
+  }
+  const total = Math.round(performance.now() - t0);
+  $("#resTime").textContent = `${total} ms · ${events.length} events`;
+  meta.prepend(el("span", {}, "first event ", el("b", {}, (firstEvent ?? "—") + "ms")),
+    el("span", {}, "first text ", el("b", {}, firstText == null ? "—" : Math.round(firstText) + "ms")));
+  if (finalUsage) meta.append(el("span", {}, "tokens ", el("b", {}, `${finalUsage.prompt_tokens ?? "?"} in / ${finalUsage.completion_tokens ?? "?"} out`)));
+  $("#resBody").innerHTML = highlight(events);
+  $("#cancelGen").hidden = true;
+}
+
+/* --------------------------------------------------------------- history/curl */
+function addHistory(req, status, ms) {
+  history.unshift({id: req.route.id, url: req.url, status, ms, at: Date.now(), path: req.pathVals, query: req.query,
+    body: req.rawBody, headers: {idem: req.headers["Idempotency-Key"] || "", reqId: $("#hReqId").value.trim()}});
+  history = history.slice(0, 40);
+  store.set("aica.history", history);
+  renderHistory();
+}
+function renderHistory() {
+  const box = $("#history");
+  if (!history.length) { box.textContent = "No requests yet."; return; }
+  box.replaceChildren(...history.map(h => {
+    const [m] = h.id.split(" ");
+    return el("div", {class: "hist", title: new Date(h.at).toLocaleTimeString() + " · " + h.ms + " ms",
+      onclick: () => { const r = ROUTES.find(x => x.id === h.id); if (r) select(r, h); }},
+      el("span", {class: "status s" + String(h.status)[0]}, h.status || "ERR"), el("span", {class: "m " + m, style: "min-width:0"}, m),
+      el("span", {style: "word-break:break-all"}, h.url));
+  }));
+}
+function curl() {
+  let req;
+  try { req = buildRequest(); } catch (e) { showError(e.message); return; }
+  const q = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
+  const parts = ["curl -sS" + (req.route.sse ? " -N" : ""), "-X " + req.route.m, q(location.origin + req.url)];
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (k === "Authorization") parts.push(`-H "Authorization: Bearer $AICA_API_KEY"`);
+    else parts.push("-H " + q(`${k}: ${v}`));
+  }
+  if (req.body != null) parts.push("-d " + q(JSON.stringify(req.body)));
+  const text = parts.join(" \\\n  ");
+  navigator.clipboard?.writeText(text).then(() => {
+    $("#curl").textContent = "copied ✓"; setTimeout(() => $("#curl").textContent = "copy as curl", 1200);
+  }, () => { resetResponse(); $("#resStatus").textContent = "curl"; $("#resBody").textContent = text; });
+}
+
+/* ================================================================ realtime */
+let ws = null;
+let wsN = 0, wsCount = 0, wsT0 = 0;
+const bubbles = new Map();          // response_id -> {node, txt}
+const pendingCalls = new Map();     // call_id -> tool call
+let lastResponseId = null, greeting = null;
+const CLOSE = {1000: "normal / session ended", 1001: "server shutting down", 1006: "abnormal: handshake rejected (bad or missing credential?) or network",
+  1009: "frame larger than WS_MAX_MESSAGE_BYTES", 1013: "client too slow to read", 4401: "unauthorized", 4403: "token restricted to another session/agent",
+  4404: "unknown session", 4408: "idle timeout", 4409: "session active on another instance (retry shortly)"};
+
+const WS_EVENTS = {
+  "response.create": () => ({type: "response.create", input: "What time is it in Chennai?"}),
+  "response.create (say)": () => ({type: "response.create", say: greeting || "Hello! How can I help?"}),
+  "response.create (all fields)": () => ({type: "response.create", input: [{role: "user", content: "Book Dr. Rao for tomorrow."}],
+    instructions: "Confirm the date back to the caller.", params: {temperature: 0.3, max_tokens: 150}, tool_choice: "auto",
+    segmentation: true, response_id: "resp_console_" + rand(4)}),
+  "response.cancel": () => ({type: "response.cancel", response_id: lastResponseId || undefined, spoken_text: "Dr. Rao is free"}),
+  "response.cancel (discard)": () => ({type: "response.cancel", response_id: lastResponseId || undefined, discard: true}),
+  "tool.result": () => ({type: "tool.result", call_id: [...pendingCalls.keys()][0] || latest("call_id") || "<call_id>",
+    output: {status: "done"}, is_error: false, continue: true}),
+  "session.update": () => ({type: "session.update", session: {instructions: "Speak Tamil if the caller does.", params: {temperature: 0.3},
+    metadata: {from: "console"}, segmentation: true,
+    tools: [{type: "function", function: {name: "hang_up", description: "End the call", parameters: {type: "object", properties: {}}}}]}}),
+  "session.get": () => ({type: "session.get"}),
+  "session.end": () => ({type: "session.end", reason: "ended_by_client"}),
+  "conversation.item.create": () => ({type: "conversation.item.create", item: {role: "user", content: "My name is Ravi."}}),
+  "conversation.truncate": () => ({type: "conversation.truncate", spoken_text: "Dr. Rao is free"}),
+  "conversation.clear": () => ({type: "conversation.clear"}),
+  "agent.handoff": () => ({type: "agent.handoff", agent_id: latest("agent_id") || "<agent_id>", reason: "billing question"}),
+  "ping": () => ({type: "ping", id: "p" + (wsN + 1)}),
+};
+const WS_HINTS = {
+  "response.create": "Starts the next turn; a running response is cancelled first (barge-in). input may be a string, a message or a list.",
+  "response.create (say)": "Speaks fixed text with no model call.",
+  "response.cancel": "spoken_text truncates the stored reply to what the caller heard.",
+  "response.cancel (discard)": "Removes the whole turn (speculative responses), also after it finished when response_id is given.",
+  "tool.result": "Answers a client tool call; when nothing else is pending (and continue) the turn continues.",
+  "agent.handoff": "Switches the active agent (cancels a running response).",
+};
+
+function refreshWsTemplates() {
+  const sel = $("#wsEvType");
+  if (!sel.options.length) for (const k of Object.keys(WS_EVENTS)) sel.append(el("option", {value: k}, k));
+  if (!$("#wsAgent").value && !$("#wsSession").value && latest("agent_id")) $("#wsAgent").value = latest("agent_id");
+  loadWsTemplate();
+}
+function loadWsTemplate() {
+  const k = $("#wsEvType").value;
+  $("#wsEvBody").value = JSON.stringify(WS_EVENTS[k](), null, 2);
+  $("#wsEvHint").textContent = WS_HINTS[k] || "";
+}
+function syncWsAuth() { $$("[data-wstoken]").forEach(n => n.hidden = $("#wsAuth").value !== "token"); }
+
+function wsState(text, cls) { const p = $("#wsState"); p.textContent = text; p.className = "pill " + (cls || ""); }
+function conv(node) {
+  const box = $("#wsConv");
+  const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.append(node);
+  if (stick) box.scrollTop = box.scrollHeight;
+  return node;
+}
+const sys = (text, err) => conv(el("div", {class: "sys" + (err ? " err" : "")}, text));
+
+function logEvent(dir, ev) {
+  wsCount++;
+  $("#wsCount").textContent = `(${wsCount})`;
+  const type = ev.type || "?";
+  const box = $("#wsLog");
+  const isDelta = type === "response.text.delta";
+  const ms = Math.round(performance.now() - wsT0);
+  const node = el("details", {class: "ev" + (dir === "out" ? " out" : "") + (type === "error" ? " error" : ""), "data-delta": isDelta ? "1" : null,
+    hidden: isDelta && $("#wsHideDeltas").checked},
+    el("summary", {}, el("span", {class: "t"}, ms + "ms"), el("span", {}, dir === "out" ? "→" : "←"),
+      el("span", {class: "muted"}, ev.seq != null ? "#" + ev.seq : ""), el("span", {class: "n"}, type),
+      el("span", {class: "d"}, short(isDelta ? JSON.stringify(ev.delta) : Object.fromEntries(Object.entries(ev).filter(([k]) => !["type", "event_id", "seq"].includes(k))), 160))),
+    el("pre", {}, JSON.stringify(ev, null, 2)));
+  const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.append(node);
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+
+function bubble(rid, agentName) {
+  if (bubbles.has(rid)) return bubbles.get(rid);
+  const txt = el("div", {class: "txt"});
+  const extra = el("div");
+  const foot = el("div", {class: "kv"});
+  const node = conv(el("div", {class: "bubble assistant"}, el("div", {class: "who"}, (agentName || "assistant") + " · " + rid), txt, extra, foot));
+  const b = {node, txt, extra, foot, text: ""};
+  bubbles.set(rid, b);
+  return b;
+}
+
+async function wsConnect() {
+  if (ws) return;
+  const agent = $("#wsAgent").value.trim(), session = $("#wsSession").value.trim();
+  const qs = new URLSearchParams();
+  if (agent) qs.set("agent_id", agent);
+  if (session) qs.set("session_id", session);
+  if (session && $("#wsCreate").checked) qs.set("create", "true");
+  const protocols = ["aica.realtime.v1"];
+  const mode = $("#wsAuth").value;
+  saveAuth();
+  try {
+    if (mode === "mint") {
+      if (!keyInput.value.trim()) throw new Error("enter an API key in the top bar first");
+      const body = {ttl_s: Number($("#wsTtl").value) || 600};
+      if (agent) body.agent_id = agent;
+      if (session) body.session_id = session;
+      wsState("minting token…");
+      const r = await fetch("/v1/realtime/tokens", {method: "POST", headers: {...authHeaders(), "Content-Type": "application/json"}, body: JSON.stringify(body)});
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(`token mint failed: ${r.status} ${b.error?.code || ""} ${b.error?.message || ""}`);
+      protocols.push("bearer." + b.token);
+      $("#wsInfo").textContent = `token expires ${b.expires_at}`;
+    } else if (mode === "key") {
+      if (!keyInput.value.trim()) throw new Error("enter an API key in the top bar first");
+      if (tenantInput.value.trim()) sys("Note: browsers cannot send X-Tenant-ID on a WebSocket; admin keys need the mint mode.");
+      protocols.push("bearer." + keyInput.value.trim());
+    } else {
+      if (!$("#wsToken").value.trim()) throw new Error("paste a realtime token");
+      protocols.push("bearer." + $("#wsToken").value.trim());
+    }
+  } catch (e) { wsState("not connected", "err"); sys(e.message, true); return; }
+
+  const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/v1/realtime${qs.toString() ? "?" + qs : ""}`;
+  wsState("connecting…", "warn");
+  wsT0 = performance.now();
+  const sock = (ws = new WebSocket(url, protocols));
+  $("#wsConnect").disabled = true;
+  $("#wsDisconnect").disabled = false;
+  sock.onopen = () => { wsState("open · " + (sock.protocol || "no subprotocol"), "ok"); sys("connected to " + url.replace(/\?.*/, "") + (qs.toString() ? "?" + qs : "")); };
+  sock.onmessage = m => {
+    let ev;
+    try { ev = JSON.parse(m.data); } catch { sys("non-JSON frame: " + short(m.data), true); return; }
+    logEvent("in", ev);
+    onServerEvent(ev);
+  };
+  sock.onclose = e => {
+    if (ws === sock) ws = null;
+    wsState(`closed ${e.code}`, e.code === 1000 ? "" : "err");
+    sys(`closed ${e.code}${e.reason ? " " + e.reason : ""} — ${CLOSE[e.code] || ""}`, e.code !== 1000);
+    $("#wsConnect").disabled = false;
+    $("#wsDisconnect").disabled = true;
+    saveIds();
+  };
+}
+
+function wsSend(ev) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { sys("not connected", true); return false; }
+  if (!ev.event_id) ev.event_id = "cli_" + (++wsN);
+  ws.send(JSON.stringify(ev));
+  logEvent("out", ev);
+  if (ev.type === "response.create") {
+    const input = ev.input;
+    const text = typeof input === "string" ? input : Array.isArray(input) ? input.map(m => m.content).join("\n")
+      : input && typeof input === "object" ? input.content : null;
+    if (text) conv(el("div", {class: "bubble user"}, el("div", {class: "who"}, "caller"), el("div", {class: "txt"}, text)));
+    else if (ev.say) sys("say: " + ev.say);
+  } else if (ev.type === "tool.result") {
+    pendingCalls.delete(ev.call_id);
+    renderPending();
+  }
+  return true;
+}
+
+function onServerEvent(ev) {
+  capture(ev);
+  const t = ev.type;
+  if (t === "session.created" || t === "session.resumed") {
+    const s = ev.session || {}, a = ev.agent || {};
+    remember("session_id", s.id);
+    $("#wsSession").value = s.id || "";
+    greeting = a.greeting || null;
+    $("#wsGreet").hidden = !greeting;
+    sys(`${t} · session ${s.id} · ${a.name ? a.name + " v" + a.version + " · " : ""}${a.model || ""} · ${s.message_count ?? 0} messages`);
+    for (const id of s.pending_tool_calls || []) if (!pendingCalls.has(id)) pendingCalls.set(id, {call_id: id});
+    renderPending();
+    saveIds();
+  } else if (t === "response.created") {
+    lastResponseId = ev.response_id;
+    bubble(ev.response_id);
+  } else if (t === "response.text.delta") {
+    const b = bubble(ev.response_id);
+    b.text += ev.delta;
+    b.txt.append(ev.delta);
+    const box = $("#wsConv"); if (box.scrollHeight - box.scrollTop - box.clientHeight < 80) box.scrollTop = box.scrollHeight;
+  } else if (t === "response.text.segment") {
+    bubble(ev.response_id).foot.dataset.segments = (Number(bubble(ev.response_id).foot.dataset.segments || 0) + 1);
+  } else if (t === "response.tool_call.started") {
+    bubble(ev.response_id).extra.append(el("span", {class: "chip"}, "⋯ " + ev.name));
+  } else if (t === "response.tool_call") {
+    bubble(ev.response_id).extra.append(el("span", {class: "chip"}, `${ev.name}(${ev.arguments}) · ${ev.kind}/${ev.side}`));
+  } else if (t === "response.tool_result") {
+    bubble(ev.response_id).extra.append(el("span", {class: "chip" + (ev.is_error ? " err" : "")},
+      `→ ${short(ev.output, 120)} · ${Math.round(ev.duration_ms || 0)}ms${ev.replayed ? " · replayed" : ""}`));
+  } else if (t === "agent.handoff") {
+    sys(`handoff ${ev.from_agent?.name || ev.from_agent?.id || ""} → ${ev.to_agent?.name || ev.to_agent?.id || ""} (${ev.source}${ev.reason ? ": " + ev.reason : ""})`);
+  } else if (t === "response.done") {
+    const b = bubble(ev.response_id, ev.agent?.name);
+    if (!b.text && ev.text) b.txt.append(ev.text);
+    const tm = ev.timings || {}, u = ev.usage || {};
+    b.foot.append(el("span", {}, el("b", {}, ev.status)), el("span", {}, "finish ", el("b", {}, ev.finish_reason ?? "—")),
+      el("span", {}, "ttft ", el("b", {}, Math.round(tm.ttft_ms ?? 0) + "ms")),
+      el("span", {}, "vertex ", el("b", {}, Math.round(tm.upstream_ttft_ms ?? 0) + "ms")),
+      el("span", {}, "total ", el("b", {}, Math.round(tm.total_ms ?? 0) + "ms")),
+      el("span", {}, "tokens ", el("b", {}, `${u.prompt_tokens ?? "?"}/${u.completion_tokens ?? "?"}`)),
+      b.foot.dataset.segments ? el("span", {}, "segments ", el("b", {}, b.foot.dataset.segments)) : null,
+      ev.cancel_reason ? el("span", {}, "cancel ", el("b", {}, ev.cancel_reason)) : null);
+    if (ev.error) b.extra.append(el("span", {class: "chip err"}, `${ev.error.code}: ${ev.error.message}`));
+    if (ev.agent?.name) b.node.querySelector(".who").textContent = `${ev.agent.name} · ${ev.response_id}`;
+    for (const c of ev.tool_calls || []) pendingCalls.set(c.call_id, c);
+    renderPending();
+  } else if (t === "tool.result.accepted") {
+    const still = new Set(ev.pending_tool_calls || []);
+    for (const k of [...pendingCalls.keys()]) if (!still.has(k)) pendingCalls.delete(k);
+    renderPending();
+  } else if (t === "session.end_requested") {
+    sys(`agent asked to end the call (${ev.reason || "end_conversation"}) — send session.end after playback`);
+  } else if (t === "session.ended") {
+    sys(`session ended: ${ev.reason}`);
+  } else if (t === "session.closing") {
+    sys("server draining: reconnect with this session_id to resume on another instance", true);
+  } else if (t === "session.state" || t === "session.updated") {
+    sys(`${t}: ${ev.session?.message_count ?? "?"} messages, status ${ev.session?.status} (see the event log)`);
+  } else if (t === "conversation.item.created") {
+    const it = ev.item || {};
+    conv(el("div", {class: "bubble " + (it.role === "user" ? "user" : "assistant")}, el("div", {class: "who"}, it.role + " · appended"),
+      el("div", {class: "txt"}, typeof it.content === "string" ? it.content : JSON.stringify(it.content))));
+  } else if (t === "conversation.truncated") {
+    sys("conversation truncated: " + short(ev.truncated));
+  } else if (t === "conversation.cleared") {
+    sys("conversation cleared");
+  } else if (t === "pong") {
+    sys(`pong ${ev.id ?? ""} · ${Math.round(performance.now() - wsT0)}ms since connect`);
+  } else if (t === "error") {
+    sys(`error ${ev.error?.code}: ${ev.error?.message}${ev.client_event_id ? " (from " + ev.client_event_id + ")" : ""}`, true);
+  }
+}
+
+function renderPending() {
+  const box = $("#wsPending");
+  box.replaceChildren();
+  for (const [id, c] of pendingCalls) {
+    const out = el("textarea", {rows: 2, spellcheck: "false"}, '{"status": "done"}');
+    const isErr = el("input", {type: "checkbox"});
+    box.append(el("div", {class: "pending"},
+      el("div", {class: "small"}, el("b", {}, "requires_action"), " client tool ", el("code", {}, c.name || ""), " ",
+        el("code", {class: "muted"}, short(c.arguments ?? "", 200)), el("div", {class: "muted mono"}, id)),
+      out,
+      el("div", {class: "row", style: "margin-top:4px"},
+        el("label", {class: "small muted row", style: "gap:4px"}, isErr, "is_error"),
+        el("button", {type: "button", class: "primary", onclick: () => {
+          let output = out.value;
+          try { output = JSON.parse(out.value); } catch {}
+          wsSend({type: "tool.result", call_id: id, output, is_error: isErr.checked, continue: true});
+        }}, "send tool.result"))));
+  }
+}
+
+/* ------------------------------------------------------------------- wiring */
+function init() {
+  keyInput.value = store.get("aica.key", "");
+  tenantInput.value = store.get("aica.tenant", "");
+  rememberBox.checked = !!store.get("aica.remember", false);
+  for (const inp of [keyInput, tenantInput]) inp.addEventListener("input", () => {
+    saveAuth(); clearTimeout(whoTimer); whoTimer = setTimeout(refreshWho, 400);
+  });
+  rememberBox.addEventListener("change", saveAuth);
+  $("#keyShow").onclick = () => { const s = keyInput.type === "password"; keyInput.type = s ? "text" : "password"; $("#keyShow").textContent = s ? "hide" : "show"; };
+
+  $("#filter").addEventListener("input", renderRoutes);
+  $("#exSel").addEventListener("change", () => {
+    $("#body").value = JSON.stringify(fillExample(current.ex[$("#exSel").value]), null, 2);
+  });
+  $("#fmt").onclick = () => { try { $("#body").value = JSON.stringify(JSON.parse($("#body").value), null, 2); } catch (e) { $("#bodyHint").textContent = e.message; } };
+  $("#send").onclick = send;
+  $("#abort").onclick = () => inflight?.abort();
+  $("#curl").onclick = curl;
+  $$("[data-gen]").forEach(b => b.onclick = () => { $("#" + b.dataset.gen).value = "console-" + rand(8); });
+  $$("#resTabs [data-tab]").forEach(b => b.onclick = () => setTab(b.dataset.tab));
+  $("#histClear").onclick = () => { history = []; store.set("aica.history", history); renderHistory(); };
+
+  // realtime
+  $("#wsAuth").addEventListener("change", syncWsAuth);
+  $("#wsConnect").onclick = wsConnect;
+  $("#wsDisconnect").onclick = () => ws?.close(1000, "client closed");
+  $("#wsEvType").addEventListener("change", loadWsTemplate);
+  $("#wsEvSend").onclick = () => {
+    let ev;
+    try { ev = JSON.parse($("#wsEvBody").value); } catch (e) { $("#wsEvHint").textContent = "invalid JSON: " + e.message; return; }
+    wsSend(ev);
+  };
+  const say = () => { const v = $("#wsSay").value.trim(); if (v && wsSend({type: "response.create", input: v})) $("#wsSay").value = ""; };
+  $("#wsSayBtn").onclick = say;
+  $("#wsSay").addEventListener("keydown", e => { if (e.key === "Enter") say(); });
+  $("#wsGreet").onclick = () => greeting && wsSend({type: "response.create", say: greeting});
+  $("#wsBarge").onclick = () => {
+    const b = lastResponseId && bubbles.get(lastResponseId);
+    wsSend({type: "response.cancel", response_id: lastResponseId || undefined, spoken_text: b && b.text ? b.text : undefined});
+  };
+  $("#wsDiscard").onclick = () => wsSend({type: "response.cancel", response_id: lastResponseId || undefined, discard: true});
+  $("#wsPing").onclick = () => wsSend({type: "ping", id: "p" + (wsN + 1)});
+  $("#wsGet").onclick = () => wsSend({type: "session.get"});
+  $("#wsEnd").onclick = () => wsSend({type: "session.end", reason: "ended_by_client"});
+  $$("#wsTabs [data-tab]").forEach(b => b.onclick = () => {
+    $$("#wsTabs [data-tab]").forEach(x => x.classList.toggle("on", x === b));
+    $$("[data-wspane]").forEach(p => p.hidden = p.dataset.wspane !== b.dataset.tab);
+  });
+  $("#wsHideDeltas").addEventListener("change", e => $$('#wsLog [data-delta]').forEach(n => n.hidden = e.target.checked));
+  $("#wsClear").onclick = () => {
+    $("#wsLog").replaceChildren(); $("#wsConv").replaceChildren(); bubbles.clear(); wsCount = 0; $("#wsCount").textContent = "";
+  };
+  syncWsAuth();
+
+  document.addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      if (current?.m === "WS") $("#wsEvSend").click(); else send();
+    } else if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) {
+      e.preventDefault(); $("#filter").focus();
+    }
+  });
+
+  fetch("/openapi.json").then(r => { if (!r.ok) $("#docsLink").hidden = true; }, () => { $("#docsLink").hidden = true; });
+  saveIds();
+  renderHistory();
+  const fromHash = ROUTES.find(r => r.id === decodeURIComponent(location.hash.slice(1)));
+  select(fromHash || ROUTES.find(r => r.p === "/v1/me"));
+  refreshReady(); setInterval(refreshReady, 15000);
+  refreshWho();
+}
+init();
+</script>
+</body>
+</html>

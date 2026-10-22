@@ -20,6 +20,7 @@ from app.api import (
     admin,
     agents,
     chat,
+    console,
     executions,
     health,
     mcp,
@@ -315,7 +316,7 @@ def create_app(settings: Settings | None = None, tokens: TokenSource | None = No
     app.add_middleware(RequestContextMiddleware, max_body_bytes=settings.max_request_body_bytes,
                        access_log=settings.access_log)
 
-    for module in (health, metrics, admin, providers, agents, tools, mcp, workflows, executions, sessions,
+    for module in (console, health, metrics, admin, providers, agents, tools, mcp, workflows, executions, sessions,
                    chat, realtime):
         app.include_router(module.router)
     app.include_router(executions.usage_router)

@@ -19,3 +19,11 @@ def test_smoke(api, vertex):
     done = events[-1]
     assert done["status"] == "completed", done
     assert done["text"].startswith("priya: Echo: hello there")
+
+
+def test_console_page(api):
+    r = api.get("/")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert "/v1/realtime" in r.text and "/v1/chat/completions" in r.text

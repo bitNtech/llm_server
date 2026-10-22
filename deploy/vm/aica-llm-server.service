@@ -1,0 +1,28 @@
+# systemd unit for running the server from a checkout on a single VM. A
+# template: deploy/vm/install.sh fills in @USER@ and @APP_DIR@, installs it and
+# enables it at boot. Configuration comes from @APP_DIR@/.env.
+
+[Unit]
+Description=AICA LLM server (Vertex AI)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@APP_DIR@
+ExecStart=@APP_DIR@/.venv/bin/python -m app
+KillSignal=SIGTERM
+TimeoutStopSec=60
+# Any exit, clean or not, brings it back.
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

@@ -4,6 +4,8 @@ Base URL: `https://<host>` (local: `http://127.0.0.1:8000`). The live OpenAPI do
 `/openapi.json` in development (`DOCS_ENABLED=true` to expose it in production). The realtime WebSocket is
 documented in [REALTIME.md](REALTIME.md), and LiveKit integration in [LIVEKIT.md](LIVEKIT.md).
 
+**Developer console.** `GET /` serves a single static page for trying every route below and the realtime WebSocket. It needs no configuration: paste an API key (or an admin key plus `X-Tenant-ID`) in the top bar. The key stays in the browser and is only sent to this server.
+
 ## Conventions
 
 **Authentication.** Send `Authorization: Bearer <key>` (or `X-API-Key: <key>`).
