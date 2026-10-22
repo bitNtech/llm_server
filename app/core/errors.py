@@ -1,6 +1,6 @@
-"""Error taxonomy. Every error leaves the gateway as an OpenAI-style envelope:
+"""Error taxonomy. Every error leaves the server as one envelope (HTTP body, SSE frame or WS event):
 
-    {"error": {"type": "...", "code": "...", "message": "...", "request_id": "..."}}
+    {"error": {"type": "...", "code": "...", "message": "...", "request_id": "...", "details": {...}}}
 """
 from __future__ import annotations
 
@@ -38,6 +38,10 @@ class GatewayError(Exception):
             body["request_id"] = request_id
         return {"error": body}
 
+    @property
+    def retryable(self) -> bool:
+        return self.status in (429, 502, 503, 504)
+
 
 class BadRequest(GatewayError):
     status, type, code = 400, "invalid_request_error", "invalid_request"
@@ -47,12 +51,20 @@ class Unauthorized(GatewayError):
     status, type, code = 401, "authentication_error", "invalid_api_key"
 
 
+class Forbidden(GatewayError):
+    status, type, code = 403, "permission_error", "forbidden"
+
+
 class NotFound(GatewayError):
     status, type, code = 404, "invalid_request_error", "not_found"
 
 
 class Conflict(GatewayError):
     status, type, code = 409, "invalid_request_error", "conflict"
+
+
+class PreconditionFailed(GatewayError):
+    status, type, code = 412, "invalid_request_error", "version_mismatch"
 
 
 class PayloadTooLarge(GatewayError):
@@ -67,17 +79,21 @@ class Overloaded(GatewayError):
     status, type, code = 429, "rate_limit_error", "overloaded"
 
 
-class EngineError(GatewayError):
-    status, type, code = 502, "server_error", "engine_error"
+class ProviderError(GatewayError):
+    status, type, code = 502, "server_error", "provider_error"
 
 
-class EngineUnavailable(GatewayError):
-    status, type, code = 503, "server_error", "engine_unavailable"
+class ProviderUnavailable(GatewayError):
+    status, type, code = 503, "server_error", "provider_unavailable"
+
+
+class StoreUnavailable(GatewayError):
+    status, type, code = 503, "server_error", "store_unavailable"
 
 
 class ShuttingDown(GatewayError):
     status, type, code = 503, "server_error", "shutting_down"
 
 
-class EngineTimeout(GatewayError):
-    status, type, code = 504, "server_error", "engine_timeout"
+class ProviderTimeout(GatewayError):
+    status, type, code = 504, "server_error", "provider_timeout"

@@ -1,0 +1,49 @@
+# Cloud Run service (asia-south1, next to the Vertex endpoint). Deploy:
+#   gcloud run services replace deploy/cloudrun/service.yaml --region=asia-south1
+# Replace PROJECT_ID / image / service account first; secrets come from Secret Manager.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: aica-llm-server
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"          # no cold start for the first caller
+        autoscaling.knative.dev/maxScale: "20"
+        run.googleapis.com/cpu-throttling: "false"      # background work: leases, usage flush, executions, keep-warm
+        run.googleapis.com/sessionAffinity: "true"      # REST calls of one session land on the instance that holds it
+        run.googleapis.com/startup-cpu-boost: "true"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      serviceAccountName: aica-llm-server@PROJECT_ID.iam.gserviceaccount.com   # roles/aiplatform.user + roles/datastore.user + secret accessor
+      containerConcurrency: 200
+      timeoutSeconds: 3600                              # WebSocket calls live up to an hour
+      containers:
+        - image: asia-south1-docker.pkg.dev/PROJECT_ID/aica/aica-llm-server:latest
+          ports:
+            - name: http1
+              containerPort: 8080
+          resources:
+            limits: {cpu: "2", memory: 2Gi}
+          env:
+            - {name: APP_ENV, value: production}
+            - {name: GCP_PROJECT_ID, value: PROJECT_ID}
+            - {name: VERTEX_LOCATIONS, value: "asia-south1,global"}
+            - {name: FIRESTORE_DATABASE, value: llm_server}
+            - {name: SHUTDOWN_GRACE_S, value: "8"}       # Cloud Run sends SIGTERM 10 s before SIGKILL
+            - name: ADMIN_API_KEYS
+              valueFrom: {secretKeyRef: {name: aica-admin-api-keys, key: latest}}
+            - name: SECRETS_ENCRYPTION_KEY
+              valueFrom: {secretKeyRef: {name: aica-secrets-encryption-key, key: latest}}
+            - name: REALTIME_TOKEN_SECRET
+              valueFrom: {secretKeyRef: {name: aica-realtime-token-secret, key: latest}}
+          startupProbe:
+            httpGet: {path: /health/ready, port: 8080}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /health/live, port: 8080}
+            periodSeconds: 15

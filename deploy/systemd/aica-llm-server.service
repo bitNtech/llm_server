@@ -1,0 +1,28 @@
+# /etc/systemd/system/aica-llm-server.service  (VM deployment; see docs/DEPLOYMENT.md)
+[Unit]
+Description=AICA LLM server (Vertex AI)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=aica
+Group=aica
+WorkingDirectory=/opt/aica-llm-server
+# Non-secret settings and secrets (mode 600): see .env.example
+Environment=LLM_SERVER_ENV_FILE=/etc/aica-llm-server/server.env
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/etc/aica-llm-server/service-account.json
+ExecStart=/opt/aica-llm-server/.venv/bin/python -m app
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/aica-llm-server
+
+[Install]
+WantedBy=multi-user.target

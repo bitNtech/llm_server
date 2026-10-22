@@ -1,15 +1,16 @@
 [project]
-name = "llm-server"
-version = "1.0.0"
-description = "Self-hosted vLLM inference server with a FastAPI gateway for real-time voice agents"
+name = "aica-llm-server"
+version = "2.0.0"
+description = "Vertex AI inference and orchestration server for real-time voice agents"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+addopts = "-m 'not live'"
 markers = [
-    "engine: needs a real vLLM engine (set LLM_TEST_ENGINE_URL)",
+    "live: calls the real Vertex AI API (opt-in: LIVE_VERTEX=1 LIVE_GCP_PROJECT=<project> pytest -m live tests/live)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 
@@ -22,4 +23,4 @@ select = ["E", "F", "W", "I", "B", "UP", "ASYNC"]
 ignore = ["B008", "ASYNC109", "ASYNC110"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["E501", "ASYNC210", "ASYNC251"]
+"tests/**" = ["E501", "ASYNC210", "ASYNC251", "B017"]

@@ -1,3 +1,3 @@
-"""Self-hosted LLM inference server: vLLM engine + FastAPI gateway for real-time voice agents."""
+"""AICA LLM server: Vertex AI inference and orchestration for real-time voice agents."""
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

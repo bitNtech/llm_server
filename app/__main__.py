@@ -1,4 +1,4 @@
-"""`python -m app` - run the gateway with uvicorn (single worker: sessions live in-process)."""
+"""`python -m app` - run the server with uvicorn (one worker per process; scale with more instances)."""
 from __future__ import annotations
 
 import sys
@@ -31,15 +31,15 @@ def main() -> None:
         app,
         host=settings.host,
         port=settings.port,
-        log_config=None,  # our structured logging is installed by create_app
+        log_config=None,  # structured logging is installed by create_app
         access_log=False,  # RequestContextMiddleware writes structured access logs
         proxy_headers=True,
         forwarded_allow_ips=settings.forwarded_allow_ips,
         ws_ping_interval=settings.ws_ping_interval_s,
         ws_ping_timeout=settings.ws_ping_interval_s,
         ws_max_size=settings.ws_max_message_bytes,
-        timeout_graceful_shutdown=int(settings.shutdown_grace_s) + 5,
-        timeout_keep_alive=75,  # > AWS ALB idle timeout default (60 s)
+        timeout_graceful_shutdown=int(settings.shutdown_grace_s) + 10,
+        timeout_keep_alive=75,  # longer than load balancer idle timeouts (60 s)
         server_header=False,
     )
     Server(config).run()

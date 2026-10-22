@@ -1,0 +1,22 @@
+# Local stack: the server + a Firestore emulator. Vertex AI is real (mount your ADC credentials).
+#   gcloud auth application-default login
+#   GCP_PROJECT_ID=<project> docker compose up --build
+services:
+  firestore:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    command: gcloud emulators firestore start --host-port=0.0.0.0:8686
+    ports: ["8686:8686"]
+
+  server:
+    build: .
+    depends_on: [firestore]
+    ports: ["8000:8080"]
+    environment:
+      APP_ENV: development
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:?set GCP_PROJECT_ID}
+      FIRESTORE_EMULATOR_HOST: firestore:8686
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/adc.json
+      ADMIN_API_KEYS: ${ADMIN_API_KEYS:-local-admin-key-change-me-0123456789}
+      ALLOW_PRIVATE_NETWORK_TARGETS: "true"
+    volumes:
+      - ${HOME}/.config/gcloud/application_default_credentials.json:/secrets/adc.json:ro

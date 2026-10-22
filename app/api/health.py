@@ -6,44 +6,51 @@ import time
 from fastapi import APIRouter, Depends, Request
 
 from app import __version__
+from app.api.deps import require, services
 from app.api.responses import FastJSONResponse
-from app.api.security import require_auth
+from app.security.auth import Principal
 
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health/live", summary="Liveness: the gateway process is serving")
+@router.get("/health/live", summary="Liveness: the process is serving")
 async def live() -> dict:
     return {"status": "ok"}
 
 
-@router.get("/health/ready", summary="Readiness: engine healthy, model loaded, not draining")
+@router.get("/health/ready", summary="Readiness: Vertex usable, Firestore reachable, not draining")
 async def ready(request: Request) -> FastJSONResponse:
-    services = request.app.state.services
-    engine = services.monitor.state
-    if services.admission.draining:
+    svc = services(request)
+    if svc.admission.draining:
         return FastJSONResponse({"status": "draining"}, status_code=503)
-    if not engine.ready:
-        return FastJSONResponse({"status": "not_ready", "reason": engine.last_error}, status_code=503)
-    return FastJSONResponse({"status": "ready", "model": engine.model})
+    reasons = []
+    if not svc.provider.ready():
+        reasons.append("vertex: " + (svc.provider.probe_error or "not ready"))
+    if not svc.db.healthy:
+        reasons.append("firestore: " + (svc.db.last_error or "not reachable"))
+    if reasons:
+        return FastJSONResponse({"status": "not_ready", "reasons": reasons}, status_code=503)
+    return FastJSONResponse({"status": "ready", "model": svc.provider.default_model})
 
 
-@router.get("/health", summary="Detailed status", dependencies=[Depends(require_auth)])
-async def status(request: Request) -> FastJSONResponse:
-    services = request.app.state.services
-    settings = services.settings
-    engine = services.monitor.state
+@router.get("/health", summary="Detailed status (any valid credential)")
+async def status(request: Request, principal: Principal = Depends(require(None))) -> FastJSONResponse:
+    svc = services(request)
+    ok = svc.provider.ready() and svc.db.healthy and not svc.admission.draining
     body = {
-        "status": "ready" if engine.ready and not services.admission.draining else "not_ready",
+        "status": "ready" if ok else "not_ready",
         "version": __version__,
-        "env": settings.app_env,
-        "uptime_s": round(time.monotonic() - services.started_at, 1),
-        "engine": {**engine.snapshot(), "mode": settings.engine_mode, "url": settings.resolved_engine_base_url},
-        "admission": services.admission.snapshot(),
-        "sessions": len(services.store),
-        "websockets": services.ws_connections,
-        "inflight": len(services.registry),
-        "server_tools": services.tools.names(),
-        "context_strategy": settings.context_strategy,
+        "env": svc.settings.app_env,
+        "instance_id": svc.settings.instance_id,
+        "uptime_s": round(time.monotonic() - svc.started_at, 1),
+        "provider": svc.provider.snapshot(),
+        "firestore": svc.db.snapshot(),
+        "mcp": svc.mcp.snapshot(None if principal.is_admin else principal.tenant_id or "-"),
+        "admission": svc.admission.snapshot(),
+        "sessions_cached": len(svc.sessions),
+        "websockets": len(svc.connections),
+        "inflight_generations": len(svc.registry),
+        "executions_running": len(svc.executions.running),
+        "write_backlog": svc.writer.pending,
     }
-    return FastJSONResponse(body, status_code=200 if body["status"] == "ready" else 503)
+    return FastJSONResponse(body, status_code=200 if ok else 503)

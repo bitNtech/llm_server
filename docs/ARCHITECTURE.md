@@ -1,110 +1,162 @@
 # Architecture
 
-## Goals
+## What the server is
 
-A self-hosted LLM endpoint for a real-time voice agent. The priorities, in order:
-
-1. **Low and predictable time to first token (TTFT)**, because the caller hears silence until the first sentence is ready.
-2. **Instant cancellation** when the caller barges in. The GPU must stop working on a reply nobody will hear.
-3. **Correct conversation state** across interruptions, tool calls and long calls.
-4. **Operational simplicity:** one repository and one `run.sh`, the same on a laptop and on EC2.
-
-## Topology
+An LLM inference and orchestration server for the AICA voice agent. **Vertex AI** (Gemini, through the
+OpenAI-compatible endpoint) does the inference. **Firestore** (database `llm_server`) holds state. The server
+itself is a stateless-by-design FastAPI process that holds live conversations in memory while calls are active.
 
 ```
-                         ┌──────────────────────────── one host (laptop or EC2) ───────────────────────────┐
- voice pipeline  ──WS──► │  Gateway (FastAPI, :8000)                     vLLM OpenAI server (127.0.0.1:8001) │
- (ASR → LLM → TTS)       │  auth · rate limit · sessions · context  ──►  continuous batching · paged KV     │
- OpenAI SDK clients ─────►  tool loop · barge-in · admission       HTTP  prefix caching · chunked prefill   │
- Prometheus ─────────────►  metrics · health · request ids         SSE   tool/reasoning parsers · /metrics  │
-                         └────────────────────────── supervised by run.sh (systemd in production) ─────────┘
+ LiveKit worker / SIP bridge ──WS /v1/realtime──┐
+ OpenAI SDKs, LiveKit plugin ──/v1/chat/completions──┤   ┌────────────── server instance ──────────────┐
+ Back office / CRM ──REST /v1/agents, tools, …──────┼──►│ auth · tenants · rate limits · idempotency  │──HTTPS/2──► Vertex AI (asia-south1 → global)
+ Webhook receivers ◄──signed callbacks──────────────┘   │ conversation runtime · tool loop · handoffs │──────────► MCP servers / HTTP tools
+                                                         │ sessions (leases) · executions · usage      │──gRPC─────► Firestore `llm_server`
+ Prometheus / OTLP collector ◄──metrics / traces────────└──────────────────────────────────────────────┘
 ```
 
-**Decision: the vLLM OpenAI server runs as a sidecar process, and the gateway talks to it over loopback HTTP.**
-The alternative was embedding `AsyncLLM` inside FastAPI. The sidecar approach was chosen because:
+ASR, TTS, WebRTC, SIP and telephony stay in the voice runtime. This server owns the conversation.
 
-- It keeps everything vLLM already does well, natively and version-proof: chat templates, the tool-call parsers (`gemma4`, `qwen3_coder`, `hermes`, …), reasoning parsers, structured outputs, `/tokenize`, Prometheus metrics, request-id propagation and abort-on-disconnect. Re-implementing these against vLLM's internal Python API would break on most vLLM upgrades.
-- It isolates failures. A CUDA error or an engine OOM kills the engine, not the process holding every caller's WebSocket. `run.sh` notices and exits non-zero, and systemd restarts the pair.
-- It lets the gateway be developed and tested without a GPU (`ENGINE_MODE=mock`), point at a remote engine (`ENGINE_MODE=external`), or point at vLLM's official Docker image.
-- The cost is one loopback HTTP hop, well under 1 ms per request. Streaming adds no per-token round trips because chunks are forwarded as they arrive.
+## Modules
 
-The engine binds to `127.0.0.1` and requires `ENGINE_API_KEY`. `run.sh` generates a fresh random key on every start and passes it through the environment, never on argv, so it cannot be read from `ps`. The gateway is the only door.
-
-## Gateway modules
-
-| Module | Responsibility |
+| Path | Responsibility |
 |---|---|
-| `app/config.py` | Single typed source of truth (pydantic-settings). Used by the gateway **and** by `run.sh` (through `app/cli.py`), so they can never disagree. |
-| `app/hardware.py`, `app/plan.py` | Detect CPU, RAM, glibc, NVIDIA driver, GPUs and compute capability. Choose the vLLM build (CUDA 13.0 / CUDA 12.9 / CPU wheel) and build the exact `vllm serve` argv and environment. |
-| `app/engine/client.py` | Pooled keep-alive `httpx` client. Applies a first-token deadline and an inter-chunk idle deadline to streams. Closing a stream aborts the request inside vLLM. |
-| `app/engine/monitor.py` | Background health and model discovery (`/health`, `/v1/models` → served name, `max_model_len`). Drives readiness. |
-| `app/core/admission.py` | Bounded concurrency plus a bounded FIFO queue with a deadline. Fails fast with 429 rather than slowing every active call. |
-| `app/core/generation.py` | A generation is a producer task plus an event queue. It can be cancelled from anywhere by one `task.cancel()`, and its `finally` always closes the engine stream. |
-| `app/core/conversation.py` | Stateful turns: context fitting, streaming, the server/client tool loop, barge-in, speculative-turn discard, and statuses. |
-| `app/core/openai_proxy.py` | Stateless OpenAI-compatible pass-through. Engine SSE frames are forwarded byte-for-byte. |
-| `app/sessions/store.py` | In-memory sessions with TTL and LRU eviction. Sessions with a live WebSocket or an active response are never evicted. |
-| `app/sessions/context.py` | Context-window management and the optional background summarization. |
-| `app/core/segmenter.py` | Incremental sentence segmentation, so TTS can start on the first complete phrase. |
-| `app/tools/` | Server-side tool registry (`@tool` decorator, timeouts, argument checks; sync tools run in threads). |
-| `app/api/*` | REST, SSE and WebSocket surfaces, auth, middleware, health and metrics. |
+| `app/config.py` | All settings (environment / `.env`), validated at startup; production refuses to start without its secrets. |
+| `app/gcp/credentials.py` | One Google credential for Vertex and Firestore. Access tokens are refreshed in the background before expiry, single-flight. |
+| `app/providers/vertex.py` | Vertex client: model × location routing, retries and failover before the first token, per-location circuit breakers, empty-response retry, request normalisation, HTTP/2 pool, keep-warm, startup probe. |
+| `app/providers/signatures.py` | Gemini thought-signature cache and repair for stateless clients. |
+| `app/store/` | Firestore wrapper (timeouts, error mapping, metrics), tenant-scoped repositories, ordered write-behind. |
+| `app/security/` | API keys, roles and scopes, realtime JWTs, Fernet secret encryption, SSRF guard, rate limiter. |
+| `app/tools/` | Tool model and JSON-Schema validation, built-ins, HTTP tools, MCP manager, executor (idempotency, timeouts, audit). |
+| `app/engine/` | Conversation runtime (turns, tool loop, handoffs, interruptions), live sessions and leases, context window, admission control, generation handles, sentence segmenter. |
+| `app/services/` | OpenAI-compatible chat, executions, workflows, webhooks, usage, idempotency. |
+| `app/api/` | HTTP routes, realtime WebSocket, middleware (request ids, body limits, metrics, spans). |
 
-## Request flows
-
-### Stateless (OpenAI-compatible)
-
-`POST /v1/chat/completions` → auth and rate limit → defaults and limits applied (max tokens, sampling defaults, `chat_template_kwargs`) → admission slot → engine stream → frames relayed. If the engine fails *before* the first frame, the client gets a real HTTP status (404, 503, …). Once streaming has started, a failure arrives as an OpenAI-style error frame followed by `[DONE]`.
-
-### Stateful session turn (REST/SSE or WebSocket)
+## A turn, end to end
 
 ```
-response.create ─► (cancel the running response if barge-in policy = cancel)
-                ─► session lock ─► append input ─► context.prepare()  (estimate; exact /tokenize only near the limit)
-                ─► admission slot ─► vLLM stream ─► text deltas, sentence segments, tool-call deltas
-                ─► tool calls?  server-side: run them (parallel, with timeouts), append results, next round
-                                client-side: status=requires_action → client sends tool.result → continue
-                ─► append assistant message ─► response.done {status, text, usage, timings}
-                ─► (summarize strategy) background compaction if near the window
+response.create ─► cancel the running response (barge-in) ─► session lock
+  ─► append input ─► resolve the active agent (pinned version, cached) ─► build the toolset
+     (builtin / HTTP / MCP / client / transfer_to_*)
+  ─► context window (estimated tokens, trim whole turns if over CONTEXT_MAX_TOKENS)
+  ─► admission slot ─► Vertex stream (route chain, first-token deadline)
+       text deltas ─► response.text.delta + sentence segments for TTS
+       tool calls  ─► response.tool_call.started (filler cue) … response.tool_call
+  ─► no tool calls: store the reply ─► response.done
+     server tools: run them in parallel (JSON-Schema validated, timeouts, side effects exactly once),
+                   inject the results in call order ─► next round
+     handoff tool: switch the active agent ─► agent.handoff ─► the new agent answers in the next round
+     client tools: register them as pending ─► response.done {requires_action}
+                   ─► tool.result ─► the turn continues as a new response
+  ─► usage counters, response record and session state (write-behind)
 ```
 
-## Latency design
+Thought signatures: every assistant message stores Gemini's `extra_content` and the model that produced it. When the history is replayed to a different model (after failover), its signatures are swapped for the documented placeholder, because signatures are specific to one model.
 
-- **Prefix caching:** history is append-only, and trimming happens in large steps (down to `CONTEXT_TRIM_TARGET_RATIO` of the budget). That keeps the system prompt and earlier turns identical across turns, so vLLM reuses their KV cache and only prefills the new utterance. `usage.cached_tokens` in every `response.done` shows the hit rate.
-- **No tokenizer call on the hot path:** prompt size is estimated from a per-session chars-per-token ratio, calibrated from exact `usage.prompt_tokens` after each turn. `/tokenize` is called only when the estimate is above 85% of the budget.
-- **Thinking is off by default** (`DEFAULT_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'`), because hidden reasoning is silent time on a phone call.
-- **Sentence segments** (`response.text.segment`) let TTS start on the first complete phrase rather than waiting for the whole reply.
-- **Server-side tools** skip the client round trip. `response.tool_call.started` is emitted as soon as the tool name is known, so the agent can play a filler ("one moment") while the arguments stream.
-- **Admission control** keeps inter-token latency stable under load. Size `MAX_CONCURRENT_GENERATIONS` with `scripts/bench.py`.
-- **Cancellation:** closing the HTTP stream to vLLM aborts the request at once and frees its KV blocks. Every cancel path (barge-in, REST cancel, client disconnect, timeouts, shutdown) goes through `Generation.cancel()`.
+### Interruptions
 
-## Conversation integrity
+Each response is a producer task with an event queue (`engine/generation.py`). Barge-in, REST cancel, client disconnect, timeout and shutdown all call `Generation.cancel()`.
 
-- **Barge-in:** `response.cancel {spoken_text}` truncates the stored assistant reply to what the caller actually heard (marked `interrupted`), so the model does not believe it said things the caller never heard.
-- **Speculative turns:** start a response on an interim transcript. If the final transcript differs, `response.cancel {discard: true}` removes the whole turn (input and partial reply).
-- **Tool-call hygiene:** if the caller moves on while client tool calls are pending, each one gets a synthetic "no result" tool message, so the history stays valid for the chat template.
-- **Template constraints:** Qwen-style templates require exactly one leading system message and at least one user message. The summary is therefore merged into the system message, system messages cannot be injected mid-conversation, and trimming always cuts at user-turn boundaries.
+- Cancelling the task closes the Vertex stream, which stops generation upstream at once.
+- Read-only tool calls are cancelled. Tools with side effects are shielded: they finish and their result is recorded.
+- The history is settled. The partial reply is kept (or truncated to `spoken_text`), and every tool call receives a result, because Gemini requires call/response pairs.
+- `discard` removes the whole speculative turn.
 
-## Configuration flow
+## Persistence and concurrency control
 
-`.env` → `run.sh` parses it safely (it never sources or executes the file; real environment variables win) → `python -m app.cli` validates it with the same pydantic `Settings` class the gateway uses → hardware plan → `vllm serve` argv and env. Invalid configuration stops startup with a message naming the variable.
+**Firestore layout.** Tenant isolation is structural: every tenant-owned document lives under `tenants/{tenant}`, and repositories build paths only from the authenticated tenant.
 
-## Scaling
+```
+tenants/{t}                       agents/{a}(+versions/{n}) · tools · mcp_servers · workflows
+                                  sessions/{s}/messages/{seq} · sessions/{s}/responses/{r}
+                                  tool_calls/{scope}__{call} · executions/{e} · idempotency/{h} · usage_daily/{day}
+api_keys/{sha256(key)}            execution_queue/{e}
+```
 
-- **Vertical (one GPU box):** raise `MAX_CONCURRENT_GENERATIONS` and `ENGINE_MAX_NUM_SEQS` together, measured with `scripts/bench.py`. Use `ENGINE_KV_CACHE_DTYPE=fp8` on Ada or Hopper GPUs for roughly twice the KV capacity. Use `ENGINE_TENSOR_PARALLEL_SIZE=auto` on multi-GPU instances when the model does not fit on one GPU.
-- **Horizontal:** sessions are in-process, so run one gateway+engine pair per instance and route each call to one instance for its lifetime. A WebSocket is naturally sticky; for REST sessions use ALB stickiness or route on the session id. The stateless `/v1/chat/completions` route can be load-balanced freely. A shared session store (Redis) can be added behind the `SessionStore` interface if calls must move between instances.
-- **Multiple uvicorn workers are intentionally not used.** The engine is the bottleneck, and one asyncio worker handles thousands of streams.
+No composite indexes are needed: every query uses one field.
+
+**What happens on the hot path.**
+
+- During a call, reads come from memory.
+- Messages, response records, session state and tool-call audit records are written **behind**, in order per session, and retried on transient errors. A voice turn therefore never waits on Firestore.
+- Writes that must be durable before the next step are synchronous: session creation, configuration changes, idempotency records, and claims for tools with side effects.
+
+**Session leases.** A live session is owned by one instance through a lease on its document (`SESSION_LEASE_S`, renewed while busy or recently used).
+
+- Another instance asking for the session gets `409 session_busy_elsewhere` (WebSocket close 4409).
+- When a session is idle past `SESSION_CACHE_TTL_S`, its owner flushes the pending writes, releases the lease and drops it from memory. Any instance can then load it from Firestore.
+- After a crash, the lease simply expires. The writes acknowledged before the crash are already in Firestore.
+- WebSockets are sticky by nature. For REST, use session affinity (Cloud Run `sessionAffinity`, or route on the session id).
+
+**Other concurrency controls.**
+
+| Mechanism | What it protects |
+|---|---|
+| Per-session `asyncio.Lock` | serialises turns within one session |
+| Optimistic concurrency (`version`, `If-Match`) | concurrent edits of agents, tools, MCP servers and workflows |
+| Firestore transactions | lease and claim operations |
+| `create()` | idempotency records and side-effect claims (conflicts on duplicates) |
+
+## Executions
+
+`execution_queue/{id}` is the work queue. Workers claim items in a transaction (owner plus lease) and heartbeat while they run; a scanner on every instance picks up queued and expired items. Workflow step results are persisted as they complete, so a resumed run skips finished steps. Tool steps use the step id as the tool call id, so side effects are not repeated. On shutdown, unfinished executions are returned to the queue.
+
+## Vertex routing and resilience
+
+- **Routes.** For model M: M@asia-south1, M@global, then each fallback model at each location.
+  - A **404** marks a route unavailable for 10 minutes.
+  - A **429, 5xx, timeout or connection error** moves on to the next route within the first-token deadline (`VERTEX_FIRST_TOKEN_TIMEOUT_S`, `VERTEX_MAX_ATTEMPTS`).
+  - A **401** refreshes the token and retries the same route once.
+  - Consecutive failures open a location's **circuit** for `VERTEX_CIRCUIT_RESET_S`; open circuits are tried last.
+- **Retries happen only before the first token.** The stream is read ahead to the first meaningful chunk, so failures before it can still fail over. After that nothing is retried, so a voice agent never repeats itself.
+- **Empty candidates.** Measured on 3.5-flash with `minimal` thinking: up to 6 of 6 follow-ups after a tool result came back with no text, no tool call and no finish reason. The server (1) uses `VERTEX_TOOL_FOLLOWUP_REASONING_EFFORT=low` for rounds whose last message is a tool result, which measured equally fast and 0 empties in 12 calls, and (2) retries an empty candidate once on the same route.
+- **Request normalisation.**
+  - Never sends both `max_tokens` and `max_completion_tokens` (Vertex rejects that).
+  - Gives Gemini a user turn when the agent speaks first (Vertex rejects input that is only a system message).
+  - Strips gateway-internal fields.
+
+## Latency
+
+Measured from the development machine in India against `aica-voice-pilot`:
+
+| Path | TTFT p50 |
+|---|---|
+| `gemini-3.5-flash` (minimal thinking), asia-south1, direct | 571-583 ms (best 501) |
+| same, global endpoint | 1259 ms |
+| through the server over WebSocket, concurrency 1 / 4 | 541 / 469 ms (`scripts/bench.py`) |
+| server overhead (client TTFT − Vertex TTFT) | **0.2 ms** median |
+
+A 100 ms TTFT is not reachable with any hosted Gemini model in this project: the TLS round trip to Mumbai alone is about 25-60 ms, and Vertex's own time to first token was ≥400 ms for every model tested.
+
+What the server does to stay off the critical path:
+
+- token refresh in the background
+- one warm HTTP/2 connection per location (startup probe plus keep-warm)
+- no Firestore or tokenizer calls during a turn
+- cached agent, tool and auth lookups
+- sentence segments, so TTS starts on the first phrase
+- `response.tool_call.started`, so the runtime can play a filler
+- server-side tools that skip a client round trip
 
 ## Security
 
-- API keys are compared in constant time against every configured key. Logs carry only a SHA-256 fingerprint.
-- Production refuses to start without keys (or an explicit `ALLOW_UNAUTHENTICATED=true` behind a trusted auth proxy), and wildcard CORS is rejected.
-- Request bodies, WebSocket frames, message sizes, tool-output sizes, session counts and messages per session are all bounded. Session parameters are whitelisted.
-- The engine is reachable only on loopback, with a per-start secret. `/docs` is off in production. `/metrics` can require auth.
-- The model is never given server tools a session did not opt into.
+- **API keys** are 256-bit random values, stored as SHA-256 hashes, compared in constant time and never logged (logs carry the key id). Roles map to scopes on every route.
+- **Admin keys** come from the environment and act inside a tenant only with an explicit `X-Tenant-ID`.
+- **Realtime tokens** are short-lived HS256 JWTs, valid only on the WebSocket, and can be pinned to a session or agent.
+- **Tenant secrets** (tool auth headers, signing secrets, MCP credentials, webhook secrets) are encrypted with Fernet (`SECRETS_ENCRYPTION_KEY`, rotation by key list) and never returned.
+- **Outbound calls** to tenant URLs (HTTP tools, MCP, webhooks) are checked against private, loopback, link-local and metadata addresses, and redirects are not followed. Production requires https.
+- **Limits:** request bodies, WebSocket frames, message sizes, tool output size, messages per session, `max_tokens`, rate limits per key (tenant overridable) and admission control. `/docs` is off in production.
+- **Production refuses to start** without admin keys, an encryption key and a realtime token secret.
 
 ## Observability
 
-- Structured logs: JSON in production, text in development. Request, session and connection ids are attached to every record.
-- `GET /metrics` exposes gateway Prometheus metrics: TTFT, inter-chunk latency, generation duration by status, admission wait and rejections, cancellations by reason, tokens (prompt, completion, cached), tool calls and latency, context trims, sessions, WebSockets, engine readiness.
-- `GET /metrics/engine` proxies vLLM's own metrics: queue depth, KV-cache usage, prefix-cache hit rate, per-phase latencies.
-- `X-Request-ID` is accepted or generated, returned to the client, and forwarded to vLLM as its request id.
-- `GET /health/live`, `GET /health/ready` (engine healthy, model loaded, not draining) and `GET /health` (authenticated detail).
+- **Logs** are JSON in production, in the Cloud Logging format (`severity`, `logging.googleapis.com/trace`), and carry request, session, tenant and connection ids plus trace ids.
+- **Metrics** (`/metrics`): TTFT (client and Vertex, by model and location), inter-token latency, generations by status, tokens by model, failovers, circuit state, admission queue and rejections, cancellations by reason, tool calls by kind and status, MCP errors, Firestore latency and write backlog, executions, webhooks and WebSockets.
+- **Traces:** OpenTelemetry over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Spans cover HTTP requests, WebSocket connections, responses, Vertex streams (with location, attempts and TTFT), tool executions and executions. `traceparent` is propagated to HTTP tools, MCP servers and webhooks.
+
+## Known limitations
+
+- Provider configuration is environment-only (by design: it contains credentials); `/v1/providers` is read-only.
+- MCP servers must be remote (Streamable HTTP or SSE). Local stdio servers are not supported through the API.
+- In the stateless `/v1/chat/completions` route, the caller owns the history, so server-side tool calls are not part of it and handoffs inside the server are disabled. Use sessions or the WebSocket for server-managed conversations.
+- Exact token counts come from Vertex usage after each round. Before a round the size is estimated (calibrated per session), and that is enough for trimming decisions.

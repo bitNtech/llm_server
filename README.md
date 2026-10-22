@@ -1,112 +1,91 @@
-# LLM Inference Server — vLLM + FastAPI for real-time voice agents
+# AICA LLM Server
 
-A self-hosted LLM endpoint for a voice agent, serving **Gemma 4 26B-A4B** (FP8 + MTP speculative decoding) with a latency-first profile. **vLLM** does the inference (continuous batching, paged KV cache, prefix caching, native tool and reasoning parsers). A **FastAPI gateway** in front of it adds the parts a phone call needs: WebSocket streaming, sessions and context management, barge-in cancellation, a tool loop, auth, admission control and observability. One `run.sh` manages the whole lifecycle on a laptop or on a GPU EC2 instance.
+The LLM inference and orchestration server for the AICA voice agent. **Vertex AI** (Gemini 3.5 Flash by default) does the inference and **Firestore** (`llm_server`) holds the state. Voice runtimes such as LiveKit stay in charge of audio, ASR, TTS, WebRTC and SIP.
 
 ```
-voice pipeline ──WS /v1/realtime──►┐
-OpenAI SDKs ──/v1/chat/completions─►  Gateway :8000  ──loopback HTTP/SSE──►  vLLM OpenAI server 127.0.0.1:8001
-REST clients ──/v1/sessions/…──────►┘  sessions · context · tools · auth · metrics      (CUDA or CPU build, picked by run.sh)
+LiveKit worker / SIP bridge ──WS /v1/realtime (aica.realtime.v1)──┐
+OpenAI SDKs / LiveKit OpenAI plugin ──POST /v1/chat/completions───┼─► server ─► Vertex AI (asia-south1 → global, failover)
+Back office ──REST: agents, tools, MCP, workflows, sessions, …────┘        └─► Firestore · MCP servers · HTTP tools · webhooks
 ```
 
-## Quick start
+## What it does
 
-```bash
-./run.sh                 # validate → install (first run only) → start vLLM → start gateway; Ctrl-C stops both gracefully
-```
+- **Conversation engine.** Streamed turns, sentence segments for TTS, multi-round tool calling (parallel server tools, client tools with `requires_action`), handoffs between agents, barge-in that keeps only what the caller heard, speculative-turn discard, and context-window management. History is persisted.
+- **Agents (LiveKit-style).** Versioned instructions, model, parameters, tools and handoff targets. Sessions pin the version they started with.
+- **Tools.**
+  - Built-ins (`get_current_time`, `end_conversation`).
+  - Tenant HTTP tools: encrypted credentials, HMAC signing, SSRF guard.
+  - MCP servers (Streamable HTTP or SSE).
+  - Client tools executed by the voice runtime.
+  - Every tool gets JSON-Schema validation; tools with side effects run exactly once.
+- **Sessions.** REST/SSE and a versioned realtime WebSocket. Firestore leases give each session one owner instance, and a session resumes on another instance after a failover.
+- **Async executions and workflows.** Agent runs and declarative step pipelines (llm / agent / tool / condition / set). Each step is persisted, crashed runs recover, and completion triggers a signed webhook. Post-call workflows can start automatically when a session ends.
+- **OpenAI-compatible `/v1/chat/completions`.** Direct model access or `agent:<id>` with server-side tools. Gemini thought signatures are repaired for SDK and LiveKit clients.
+- **Platform.**
+  - Tenants with role-scoped API keys, ephemeral realtime tokens, rate limits and idempotency keys.
+  - ETag optimistic concurrency, usage tracking (day / model / agent / API).
+  - Prometheus metrics, OpenTelemetry tracing, Cloud Logging JSON logs.
+  - Readiness and liveness checks, graceful drain.
 
-On the first run `run.sh` copies `.env.example` to `.env`, bootstraps `uv` and Python 3.12, creates `.venv` (gateway) and `.venv-vllm` (engine), installs the vLLM build that matches the machine, downloads the model, and starts everything. Later runs reuse what is already installed.
+## Model choice and latency (measured)
 
-```bash
-./run.sh check           # what was detected (CPU flags, RAM, NVIDIA driver/GPUs) and the exact `vllm serve` command
-ENGINE_MODE=mock ./run.sh                                        # no model: deterministic mock engine (laptop default in .env)
-ENGINE_MODEL=Qwen/Qwen3-0.6B ENGINE_REVISION= ENGINE_SERVED_MODEL_NAME= ENGINE_TOOL_CALL_PARSER=hermes ENGINE_REASONING_PARSER=qwen3 ./run.sh
-                                                                 # small real model on a laptop CPU
-./run.sh test            # unit + integration tests (no GPU needed)
-.venv/bin/python scripts/smoke.py --tools                        # end-to-end check of a running server
-.venv/bin/python scripts/bench.py --concurrency 1,8,32           # TTFT / ITL under load (capacity planning)
-```
+Every Gemini model the project can use was benchmarked from India: streaming time to first token on a warm connection, with a voice-agent prompt. **`google/gemini-3.5-flash` in `asia-south1` with minimal thinking** was the fastest model with a 1,048,576-token context window (verified with an over-limit request).
 
-| `run.sh` command | What it does |
+| Measurement | p50 TTFT |
 |---|---|
-| `start` (default) | Full lifecycle in the foreground. SIGINT/SIGTERM drain the gateway, then stop vLLM. If either process dies, the other is stopped and the exit code is non-zero (for systemd restarts). |
-| `install` | Virtualenvs, dependencies, vLLM (CUDA 13.0 / CUDA 12.9 / CPU wheel chosen from the hardware) and the model download. Idempotent. |
-| `check` / `doctor` | Hardware and configuration report. Fails on invalid configuration. |
-| `test [pytest args]` | Test suite. |
-| `stop` / `status` | Control a running instance through `run/llm-server.pid`. |
-| `engine-cmd` | Print the `vllm serve …` command line. |
+| Vertex direct, asia-south1 | 571-583 ms |
+| Through this server over WebSocket (concurrency 1 / 4) | 541 / 469 ms |
+| Server overhead (client TTFT − Vertex TTFT) | **0.2 ms** |
 
-## Features
+**Target not met: TTFT under 100 ms is not achievable with any hosted Gemini model available to this project.** The network round trip to the Vertex region is already 25-60 ms, and Vertex's own time to first token was at least 400 ms for every model tested. The server keeps its own contribution to about 0.2 ms; the rest is Vertex. Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#latency).
 
-- **Native vLLM:** the official OpenAI-compatible server with prefix caching, chunked prefill, tool parsers (`gemma4`, `qwen3_coder`, `hermes`, …), MTP speculative decoding, reasoning parsers, `/tokenize`, Prometheus metrics, request-id headers and abort-on-disconnect.
-- **APIs:**
-  - OpenAI-compatible `/v1/chat/completions`, so any OpenAI SDK works.
-  - Stateful `/v1/sessions` REST and SSE API.
-  - Realtime WebSocket `/v1/realtime` built for voice (sentence segments for TTS, tool-call "started" events for fillers).
-- **Barge-in:** cancel from any path (WebSocket, REST, request id, client disconnect, timeout, shutdown) and vLLM aborts at once. The stored reply is truncated to what the caller actually heard. Speculative turns can be discarded.
-- **Tools:** client-side tools (`requires_action` → `tool.result`) and server-side Python tools (`@tool`, run in-process with timeouts), in a multi-round tool loop.
-- **Context management:** prompt size is estimated and calibrated from real usage, with no tokenizer call on the hot path. Trimming drops whole turns and keeps prefix-cache hits. Optional background summarization runs at low scheduling priority.
-- **Production basics:** API keys, rate limits, body/frame/message limits, admission control (fast 429s rather than slow calls for everyone), graceful drain, structured JSON logs with request/session ids, Prometheus metrics for TTFT, inter-token latency, cancellations, tokens and cache hits, and health/readiness probes.
-- **One config surface:** every setting comes from `.env` or the environment, validated by one pydantic model shared by the gateway and `run.sh`.
+## Quick start (local)
 
-## Configuration
+```bash
+gcloud auth application-default login     # Vertex access
+cp .env.example .env                       # set GCP_PROJECT_ID and ADMIN_API_KEYS
+./run.sh dev                               # Firestore emulator + server on http://127.0.0.1:8000 (real Vertex)
 
-Everything is in [`.env.example`](.env.example), with comments. The most important settings:
+ADMIN=<your admin key>
+curl -s localhost:8000/v1/tenants -H "Authorization: Bearer $ADMIN" -H 'content-type: application/json' \
+     -d '{"name": "Dev"}'                  # → owner API key (aica_...)
+KEY=aica_...
+curl -s localhost:8000/v1/agents -H "Authorization: Bearer $KEY" -H 'content-type: application/json' -d '{
+  "name": "Reception", "instructions": "You are Priya, receptionist of City Hospital. One short sentence.",
+  "tools": [{"type": "builtin", "name": "get_current_time"}]}'
+curl -N localhost:8000/v1/sessions -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
+     -d '{"agent_id": "agent_...", "session_id": "call-1"}'
+curl -N localhost:8000/v1/sessions/call-1/responses -H "Authorization: Bearer $KEY" \
+     -H 'content-type: application/json' -d '{"input": "What time is it in Chennai?"}'
+```
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `APP_ENV` | `development` | `production` requires `API_KEYS`, logs JSON and disables `/docs` |
-| `API_KEYS` | (empty) | comma-separated client keys |
-| `ENGINE_MODE` | `managed` | `managed` (run.sh starts vLLM), `external` (`ENGINE_BASE_URL`), `mock` |
-| `ENGINE_MODEL` | `RedHatAI/gemma-4-26B-A4B-it-FP8-dynamic` (pinned revision) | Gemma 4 26B-A4B, FP8 W8A8 |
-| `ENGINE_SPECULATIVE_CONFIG` | Gemma 4 MTP drafter, 4 tokens | speculative decoding (GPU only) |
-| `ENGINE_TOOL_CALL_PARSER` / `ENGINE_REASONING_PARSER` | `gemma4` / `gemma4` | must match the model family |
-| `ENGINE_MAX_NUM_SEQS` / `MAX_CONCURRENT_GENERATIONS` | `32` / `32` | small batches keep inter-token latency low; size with `scripts/bench.py` |
-| `ENGINE_ATTENTION_BACKEND` | `auto` | Triton on H100/H200 with vLLM 0.30/0.31 (FA4 decode regression workaround) |
-| `ENGINE_DEVICE` | `auto` | `cuda` if an NVIDIA GPU is visible, else `cpu` |
-| `ENGINE_MAX_MODEL_LEN` | `8192` | shorter context = faster decode attention |
-| `ENGINE_GPU_MEMORY_UTILIZATION` | `0.90` | GPU memory share for vLLM |
-| `DEFAULT_MAX_TOKENS` | `200` | spoken replies are short |
-| `DEFAULT_CHAT_TEMPLATE_KWARGS` | `{"enable_thinking": false}` | no silent reasoning before speaking |
-| `CONTEXT_STRATEGY` | `truncate` | or `summarize` |
-| `ENGINE_FIRST_TOKEN_TIMEOUT_S` / `QUEUE_TIMEOUT_S` / `GENERATION_TIMEOUT_S` | `15` / `3` / `120` | fail fast so the agent can play a fallback |
+| Command | What it does |
+|---|---|
+| `./run.sh` | install, validate configuration, run (production entry point: `python -m app`) |
+| `./run.sh dev` | same, with a local Firestore emulator |
+| `./run.sh check` | print the effective configuration and credential status |
+| `./run.sh test` | 84 unit + integration tests: Firestore emulator, a fake Vertex that matches the live API, a real MCP server |
+| `./run.sh test-live` | 7 live tests against real Vertex: streaming, parallel tools with thought signatures, handoff, OpenAI SDK, structured output, latency |
+| `scripts/bench.py` | WebSocket TTFT benchmark against a running server |
+| `scripts/livekit_compat.py` | drive a running server through the real LiveKit OpenAI plugin |
 
 ## Documentation
 
-- [docs/API.md](docs/API.md): REST, SSE and WebSocket protocol reference, plus the recommended voice-agent flow.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): design decisions, request flows, latency design, scaling, security.
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): prerequisites, laptop vs EC2, Gemma 4 instance sizing and latency profile, systemd, TLS/ALB, monitoring, upgrades, troubleshooting.
-- [deploy/production.env.example](deploy/production.env.example): the production overrides file (`/etc/llm-server/llm-server.env`).
+- [docs/API.md](docs/API.md): every HTTP route, auth model, errors, idempotency, tools, MCP, workflows, executions, webhooks, usage
+- [docs/REALTIME.md](docs/REALTIME.md): realtime WebSocket protocol `aica.realtime.v1` (events, barge-in, voice flow)
+- [docs/LIVEKIT.md](docs/LIVEKIT.md): using the server from LiveKit Agents (verified with `livekit-agents` 1.8.8)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): design, turn flow, persistence and leases, failover, latency, security
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and [.env.example](.env.example): settings
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): GCP setup, secrets, Cloud Run, VM, operations and troubleshooting
 
 ## Layout
 
 ```
-run.sh                      lifecycle manager (validate, install, start, supervise, stop)
-app/config.py               all settings (env-driven, validated)
-app/hardware.py, plan.py    hardware detection → vLLM build + `vllm serve` argv
-app/cli.py                  helper commands used by run.sh
-app/main.py, __main__.py    FastAPI app, lifecycle, graceful drain; uvicorn entry point
-app/api/                    routes: health, metrics, OpenAI-compatible, sessions, realtime WS; auth, middleware
-app/core/                   admission, generation handles, conversation/tool loop, OpenAI proxy, segmenter, errors
-app/engine/                 vLLM client + health monitor
-app/sessions/               session store, context-window management
-app/tools/                  server-side tool registry + built-ins
-app/mock_engine.py          vLLM protocol stand-in for tests / ENGINE_MODE=mock
-scripts/                    smoke test, benchmark, model prefetch
-deploy/                     systemd unit, nginx config
-tests/                      unit + integration (live servers, WebSockets, run.sh lifecycle)
+app/config.py          settings          app/main.py        wiring, lifecycle, graceful drain
+app/api/               routes + WS       app/engine/        runtime, sessions, context, agents, admission
+app/providers/         Vertex client     app/tools/         builtin, HTTP, MCP, executor
+app/store/             Firestore         app/services/      chat, executions, workflows, webhooks, usage
+app/security/          auth, crypto, SSRF guard, rate limits
+tests/                 unit, integration (emulator + fakes), live (real Vertex)
+deploy/                Cloud Run service, systemd unit       scripts/  emulator, bench, LiveKit check
 ```
-
-## Adding server-side tools
-
-```python
-# mycompany/tools.py   (then TOOLS_MODULES=app.tools.builtin,mycompany.tools)
-from app.tools import tool
-
-@tool(description="Look up a patient's next appointment",
-      parameters={"type": "object", "properties": {"phone": {"type": "string"}}, "required": ["phone"]},
-      timeout_s=2.0)
-async def next_appointment(phone: str) -> dict:
-    ...
-```
-
-Sessions opt in with `"server_tools": ["next_appointment"]`. The model is never offered tools the session did not enable.
